@@ -1,0 +1,13 @@
+schema_version: 1
+family_id: green_black_bowls_onto_plates
+label: place the green bowl onto the plate that is in the table center and place the black bowl onto the plate that is next to the blue bowl
+variants:
+  level1:
+    # KITCHEN SCENE24 LEVEL1; π₀.₅ LIBERO-X screen 18/30 (60%). LIBERO-X built-in two-step task.
+    task_id: LEVEL1::EXTENSION_KITCHEN_SCENE24_green_bowl_onto_plate_that_is_table_center_and_black_bowl_onto_plate_that_is_next_blue_bowl
+    level: LEVEL1
+    task_name: EXTENSION_KITCHEN_SCENE24_green_bowl_onto_plate_that_is_table_center_and_black_bowl_onto_plate_that_is_next_blue_bowl
+    goal_prompt: place the green bowl onto the plate that is in the table center and place the black bowl onto the plate that is next to the blue bowl
+    bddl: ../../third_party/LIBERO-X/libero/libero_x/bddl/LEVEL1/EXTENSION_KITCHEN_SCENE24_green_bowl_onto_plate_that_is_table_center_and_black_bowl_onto_plate_that_is_next_blue_bowl.bddl
+    init: ../../third_party/LIBERO-X/libero/libero_x/init/LEVEL1/EXTENSION_KITCHEN_SCENE24_green_bowl_onto_plate_that_is_table_center_and_black_bowl_onto_plate_that_is_next_blue_bowl.init
+    optional: false

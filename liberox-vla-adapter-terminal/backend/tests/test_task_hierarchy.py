@@ -58,22 +58,41 @@ def test_default_catalog_covers_all_registered_families_and_levels_without_loadi
     assert {entry["level"] for entry in entries} == {f"LEVEL{i}" for i in range(1, 5)}
     assert {entry["family_id"] for entry in entries} == set(families)
     assert len({(e["family_id"], e["level"], e["prompt"]) for e in entries}) == len(entries)
+    # Collection families (Scene24 L1 etc.) register only the levels used for data collection;
+    # offview_bowls is a custom scene stored under tasks/ rather than a LIBERO-X level folder.
+    collection_levels = {
+        "offview_bowls": {"LEVEL1"},
+        "bowls_left_right_of_drainer": {"LEVEL1", "LEVEL2", "LEVEL3"},
+        "black_blue_bowls_in_tray": {"LEVEL2"},
+        "green_black_bowls_onto_plates": {"LEVEL1"},
+        "largest_medium_bowls_in_drainer": {"LEVEL1"},
+    }
+    assert collection_levels.keys() <= set(families)
     for family_id, family in families.items():
         variants = [entry for entry in entries if entry["family_id"] == family_id]
-        assert {entry["level"] for entry in variants} == {f"LEVEL{i}" for i in range(1, 5)}
+        expected_levels = collection_levels.get(family_id, {f"LEVEL{i}" for i in range(1, 5)})
+        assert {entry["level"] for entry in variants} == expected_levels
         assert {entry["family_label"] for entry in variants} == {family["label"]}
         for entry in variants:
             bddl, init = catalog.paths(entry["task_id"])
             assert bddl.is_file() and init.is_file()
-            assert bddl.stem == init.stem == entry["task_name"]
-            assert bddl.parent.name == init.parent.name == entry["level"]
+            if family_id != "offview_bowls":
+                assert bddl.stem == init.stem == entry["task_name"]
+                assert bddl.parent.name == init.parent.name == entry["level"]
             assert entry["prompt"] == parse(bddl)["language"]
             assert entry["init_state_index_max"] == 9
             assert catalog.initial_state(entry["task_id"], 9).shape == (5,)
     bowl = [e for e in entries if e["family_id"] == "bowl_on_stove"]
     assert len(bowl) == 5 and len({e["family_label"] for e in bowl}) == 1
     assert len([e for e in bowl if e["level"] == "LEVEL4"]) == 2
-    assert all(e["task_id"] == f"{e['level']}::{e['task_name']}" for e in entries)
+    assert all(e["task_id"] == f"{e['level']}::{e['task_name']}"
+               for e in entries if e["family_id"] != "offview_bowls")
+    offview, = [e for e in entries if e["family_id"] == "offview_bowls"]
+    assert offview["task_id"] == "custom::offview_bowls::plan_i_v1"
+    assert offview["task_name"] == "CUSTOM_offview_bowls_plan_i_v1"
+    scene24, = [e for e in entries if e["family_id"] == "green_black_bowls_onto_plates"]
+    assert scene24["task_id"] == ("LEVEL1::EXTENSION_KITCHEN_SCENE24_green_bowl_onto_plate_that_is_table_center_"
+                                  "and_black_bowl_onto_plate_that_is_next_blue_bowl")
     new_tasks = {
         "bowl_in_drawer_and_close": (
             "EXTENSION_KITCHEN_SCENE5_place_the_yellow_bowl_in_the_bottom_drawer_of_the_white_cabinet_and_close_the_drawer",

@@ -1,0 +1,53 @@
+(define (problem LIBERO_Kitchen_Tabletop_Manipulation)
+  (:domain robosuite)
+  (:language place the yellow bowl on the plate and place the black bowl in the wooden tray)
+    (:regions
+      (plate_init_region
+          (:target kitchen_table)
+          (:ranges ((-0.05 -0.20 0.05 -0.10)))
+          (:yaw_rotation ((0.0 0.0)))
+      )
+      (wooden_tray_init_region
+          (:target kitchen_table)
+          (:ranges ((-0.05 0.12 0.05 0.20)))
+          (:yaw_rotation ((1.5707963267948966 1.5707963267948966)))
+      )
+      (akita_yellow_bowl_init_region
+          (:target kitchen_table)
+          (:ranges ((-0.20 -0.05 -0.10 0.05)))
+          (:yaw_rotation ((0.0 0.0)))
+      )
+      (akita_black_bowl_init_region
+          (:target kitchen_table)
+          (:ranges ((-0.20 0.50 -0.05 0.55)))
+          (:yaw_rotation ((0.0 0.0)))
+      )
+      (contain_region
+          (:target wooden_tray_1)
+      )
+    )
+  (:fixtures
+    kitchen_table - kitchen_table
+  )
+  (:objects
+    wooden_tray_1 - wooden_tray
+    plate_1 - plate
+    akita_yellow_bowl_1 - akita_yellow_bowl
+    akita_black_bowl_1 - akita_black_bowl
+  )
+  (:obj_of_interest
+    akita_yellow_bowl_1
+    akita_black_bowl_1
+    plate_1
+    wooden_tray_1
+  )
+  (:init
+    (On plate_1 kitchen_table_plate_init_region)
+    (On wooden_tray_1 kitchen_table_wooden_tray_init_region)
+    (On akita_yellow_bowl_1 kitchen_table_akita_yellow_bowl_init_region)
+    (On akita_black_bowl_1 kitchen_table_akita_black_bowl_init_region)
+  )
+  (:goal
+    (And (On akita_yellow_bowl_1 plate_1) (In akita_black_bowl_1 wooden_tray_1_contain_region))
+  )
+)

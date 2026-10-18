@@ -6,3 +6,8 @@ families:
   stack_bowls: stack_bowls.yaml
   bowl_in_drawer_and_close: bowl_in_drawer_and_close.yaml
   stove_off_and_sort_bowls: stove_off_and_sort_bowls.yaml
+  offview_bowls: offview_bowls.yaml
+  bowls_left_right_of_drainer: bowls_left_right_of_drainer.yaml
+  black_blue_bowls_in_tray: black_blue_bowls_in_tray.yaml
+  green_black_bowls_onto_plates: green_black_bowls_onto_plates.yaml
+  largest_medium_bowls_in_drainer: largest_medium_bowls_in_drainer.yaml

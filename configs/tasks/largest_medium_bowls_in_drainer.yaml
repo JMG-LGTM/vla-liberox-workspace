@@ -1,0 +1,13 @@
+schema_version: 1
+family_id: largest_medium_bowls_in_drainer
+label: place the largest bowl in the left side of the drainer and the medium bowl in the right side
+variants:
+  level1:
+    # KITCHEN SCENE31 LEVEL1; π₀.₅ LIBERO-X screen 17/30 (57%). LIBERO-X built-in two-step task.
+    task_id: LEVEL1::EXTENSION_KITCHEN_SCENE31_largest_bowl_left_side_drainer_and_medium_bowl_right_side
+    level: LEVEL1
+    task_name: EXTENSION_KITCHEN_SCENE31_largest_bowl_left_side_drainer_and_medium_bowl_right_side
+    goal_prompt: place the largest bowl in the left side of the drainer and the medium bowl in the right side
+    bddl: ../../third_party/LIBERO-X/libero/libero_x/bddl/LEVEL1/EXTENSION_KITCHEN_SCENE31_largest_bowl_left_side_drainer_and_medium_bowl_right_side.bddl
+    init: ../../third_party/LIBERO-X/libero/libero_x/init/LEVEL1/EXTENSION_KITCHEN_SCENE31_largest_bowl_left_side_drainer_and_medium_bowl_right_side.init
+    optional: false

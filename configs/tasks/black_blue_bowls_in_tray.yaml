@@ -1,0 +1,13 @@
+schema_version: 1
+family_id: black_blue_bowls_in_tray
+label: place the black bowl and the blue bowl in the wooden tray
+variants:
+  level2:
+    # KITCHEN SCENE23 LEVEL2; π₀.₅ LIBERO-X screen 20/30 (67%). LIBERO-X built-in two-step task.
+    task_id: LEVEL2::EXTENSION_KITCHEN_SCENE23_place_the_black_bowl_and_the_blue_bowl_in_the_wooden_tray
+    level: LEVEL2
+    task_name: EXTENSION_KITCHEN_SCENE23_place_the_black_bowl_and_the_blue_bowl_in_the_wooden_tray
+    goal_prompt: place the black bowl and the blue bowl in the wooden tray
+    bddl: ../../third_party/LIBERO-X/libero/libero_x/bddl/LEVEL2/EXTENSION_KITCHEN_SCENE23_place_the_black_bowl_and_the_blue_bowl_in_the_wooden_tray.bddl
+    init: ../../third_party/LIBERO-X/libero/libero_x/init/LEVEL2/EXTENSION_KITCHEN_SCENE23_place_the_black_bowl_and_the_blue_bowl_in_the_wooden_tray.init
+    optional: false

@@ -1,0 +1,32 @@
+schema_version: 1
+family_id: bowls_left_right_of_drainer
+label: place the black bowl to the right and the green bowl to the left of the bowl drainer
+variants:
+  level1:
+    # LIBERO-X built-in two-step task (KITCHEN SCENE10). Stage instructions are verbatim
+    # LIBERO-X training prompts (task 22/253 and 16/254).
+    task_id: LEVEL1::EXTENSION_KITCHEN_SCENE10_black_bowl_right_bowl_drainer_and_green_bowl_left_bowl_drainer
+    level: LEVEL1
+    task_name: EXTENSION_KITCHEN_SCENE10_black_bowl_right_bowl_drainer_and_green_bowl_left_bowl_drainer
+    goal_prompt: place the black bowl to the right of the bowl drainer and place the green bowl to the left of the bowl drainer
+    bddl: ../../third_party/LIBERO-X/libero/libero_x/bddl/LEVEL1/EXTENSION_KITCHEN_SCENE10_black_bowl_right_bowl_drainer_and_green_bowl_left_bowl_drainer.bddl
+    init: ../../third_party/LIBERO-X/libero/libero_x/init/LEVEL1/EXTENSION_KITCHEN_SCENE10_black_bowl_right_bowl_drainer_and_green_bowl_left_bowl_drainer.init
+    optional: false
+  level2:
+    # Same instruction and goal as LEVEL1, LEVEL2 object layouts (10 initial states).
+    task_id: LEVEL2::EXTENSION_KITCHEN_SCENE10_black_bowl_right_bowl_drainer_and_green_bowl_left_bowl_drainer
+    level: LEVEL2
+    task_name: EXTENSION_KITCHEN_SCENE10_black_bowl_right_bowl_drainer_and_green_bowl_left_bowl_drainer
+    goal_prompt: place the black bowl to the right of the bowl drainer and place the green bowl to the left of the bowl drainer
+    bddl: ../../third_party/LIBERO-X/libero/libero_x/bddl/LEVEL2/EXTENSION_KITCHEN_SCENE10_black_bowl_right_bowl_drainer_and_green_bowl_left_bowl_drainer.bddl
+    init: ../../third_party/LIBERO-X/libero/libero_x/init/LEVEL2/EXTENSION_KITCHEN_SCENE10_black_bowl_right_bowl_drainer_and_green_bowl_left_bowl_drainer.init
+    optional: false
+  level3:
+    # Same instruction and goal; LEVEL3 adds distractors (plate, wine bottle, yellow book).
+    task_id: LEVEL3::EXTENSION_KITCHEN_SCENE10_LEVEL3__T63_black_bowl_right_bowl_drainer_and_green_bowl_left_bowl_drainer
+    level: LEVEL3
+    task_name: EXTENSION_KITCHEN_SCENE10_LEVEL3__T63_black_bowl_right_bowl_drainer_and_green_bowl_left_bowl_drainer
+    goal_prompt: place the black bowl to the right of the bowl drainer and place the green bowl to the left of the bowl drainer
+    bddl: ../../third_party/LIBERO-X/libero/libero_x/bddl/LEVEL3/EXTENSION_KITCHEN_SCENE10_LEVEL3__T63_black_bowl_right_bowl_drainer_and_green_bowl_left_bowl_drainer.bddl
+    init: ../../third_party/LIBERO-X/libero/libero_x/init/LEVEL3/EXTENSION_KITCHEN_SCENE10_LEVEL3__T63_black_bowl_right_bowl_drainer_and_green_bowl_left_bowl_drainer.init
+    optional: false

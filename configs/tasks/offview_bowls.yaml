@@ -1,0 +1,14 @@
+schema_version: 1
+family_id: offview_bowls
+label: place the yellow bowl on the plate and place the off-view black bowl in the wooden tray
+variants:
+  plan_i_v1:
+    # Plan I: black bowl starts off the main camera view (table side edge); operator brings it into view
+    # at the stage boundary. 50 init states, black bowl <= 2 px in agentview for every state.
+    task_id: custom::offview_bowls::plan_i_v1
+    level: LEVEL1
+    task_name: CUSTOM_offview_bowls_plan_i_v1
+    goal_prompt: place the yellow bowl on the plate and place the black bowl in the wooden tray
+    bddl: ../../tasks/offview_bowls/scene.bddl
+    init: ../../tasks/offview_bowls/initial_states.init
+    optional: false
