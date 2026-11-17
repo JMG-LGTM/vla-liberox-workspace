@@ -11,6 +11,7 @@ usage documentation. The official IDQL entry point is `train_idql_official.py`.
 | `train.py --method bc` | Masked flow-matching behavior cloning for pi0.5. |
 | `train.py --method iql` | Existing PyTorch IQL with advantage-weighted actor updates. |
 | `train.py --method critic` | Existing custom PyTorch PixelIQL critic-only path. |
+| `idql_eval/` | IDQL at evaluation time: frozen BC proposes 4 candidates, the exported twin-Q picks one. See [idql_eval/README.md](idql_eval/README.md). |
 
 The official path uses the authors' Q/V core. Its vision, action-chunk and
 external frozen-policy integration are adaptations, not a reproduction of
@@ -22,6 +23,7 @@ implementation; its weights cannot be loaded as official JAX checkpoints.
 - [Official IDQL architecture, interfaces and usage](docs/OFFICIAL_IDQL.md)
 - [Official training loop](src/post_training/official_idql/runner.py)
 - [Official Q/V core](src/post_training/official_idql/core.py)
+- [Candidate generation and Q selection at evaluation time](idql_eval/runtime_core.py)
 - [Fixed upstream source manifest](src/post_training/_vendor/idql_official/UPSTREAM.json)
 - [pi0.5 environment and policy integration](docs/PI05.md)
 - [Existing PyTorch critic](docs/CRITIC.md)

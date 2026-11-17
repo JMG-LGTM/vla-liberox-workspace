@@ -1,0 +1,37 @@
+{
+  "_comment": "Values of the Scene24 L1 run that scored 76/100 (BC v2 + Q15000). Replace the /path/to parts with local paths.",
+  "name": "idql-bcv2-q15000",
+  "workspace": "/path/to/vla-liberox-workspace",
+  "results_dir": "/path/to/experiment/evaluation_u15000/results",
+  "platform_env_snapshot": "/path/to/platform_env.snapshot",
+  "platform_conda_env": "vla-liberox",
+  "dependencies_dir": "/path/to/gym_only_site_packages",
+  "dependency_receipt": null,
+  "bc": {
+    "policy_id": "pi05-bc-sc24-l1-bc52s5993-full-b64-u15000-20261116",
+    "actor_sha256": "d9f67fefdf6d417bdc28c9a6a5c0554cb0fed23ae358bc8a6ddd31d311f922b7",
+    "actor_bytes": 7473224199,
+    "training_step": 15000,
+    "base_checkpoint": "/path/to/pi05_liberox_torch",
+    "base_revision": "5d51b3361c8b83bc4a28a080f9fd5eb7a5224b57a400d8b145b9683f989e631d"
+  },
+  "critic": {
+    "scorer_dir": "/path/to/runs/production/scorers/update_00015000",
+    "normalization": "/path/to/runs/production/normalization.json",
+    "normalization_sha256": "68c9720558a9ae23c15d0c604ea02d9cb806b400d75ea6b19d29d0e0e6ac0dc2",
+    "selection_json": "/path/to/runs/production/selection.json",
+    "validation_json": "/path/to/runs/production/validation/update_00015000.json",
+    "validation_chunks": 1436,
+    "step": 15000,
+    "optimizer_updates": 30000,
+    "source_commit": "3bc0f55d4fc753e1e6781930c7495266040d7d28"
+  },
+  "schedule_sha256s": [
+    "3ab9feb4dcb4bbbca5009fb8c4f2ceab4aeba37761ee0b8a224ef5d5dec7c15d",
+    "17b67efa9c347c8a94c381ada51617e7fc506764a4aa366d7b530ce4e086f88f"
+  ],
+  "halves": [
+    {"name": "seed0", "source_evaluation_id": "eval_20261116_070616_8e8f0ebc"},
+    {"name": "seed5", "source_evaluation_id": "eval_20261116_081919_54cf61fa"}
+  ]
+}
