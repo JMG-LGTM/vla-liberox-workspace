@@ -93,6 +93,8 @@ def dry_run(config, data_root, world):
         from .replay import load_normalization_file
         load_normalization_file(config["data"]["normalization"])
     return {"dry_run": True, "method": config["method"], **plan,
+            "critic_implementation": "custom_pytorch_pixel_iql_v1" if config["method"] != "bc" else None,
+            "uses_author_official_idql": False,
             "environment": environment,
             "dataset_sha256": data["dataset_sha256"], "chunks": data["count"],
             **_split_report(data), "critic_initialization": initialization,
@@ -606,6 +608,8 @@ def _train(config, data_root, device, resume, stopping):
     if resume:
         primary_call(lambda: _restore_run_artifacts(run_dir, start, metadata))
     provenance = {"schema_version": 1, "code": code_revision(), **prepared, **plan,
+                  "critic_implementation": "custom_pytorch_pixel_iql_v1" if critic is not None else None,
+                  "uses_author_official_idql": False,
                   "method": config["method"], "termination_rule": config["reward"]["termination_rule"],
                   "reward_definition": config["reward"], "normalization": normalization,
                   "cache_fingerprint": dataset.metadata["fingerprint"], "device": str(device),

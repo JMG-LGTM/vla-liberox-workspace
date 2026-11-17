@@ -1,0 +1,2 @@
+# Author source hashes describe original bytes, including mixed upstream EOLs.
+src/post_training/_vendor/idql_official/** -text

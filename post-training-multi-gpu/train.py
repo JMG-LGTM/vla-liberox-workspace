@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Noninteractive standalone torchrun entry point."""
+"""Legacy torchrun BC/IQL/custom PixelIQL; not the authors' IDQL implementation.
+
+Author-source IDQL Q/V uses the separate train_idql_official.py entry point.
+"""
 from __future__ import annotations
 
 import argparse

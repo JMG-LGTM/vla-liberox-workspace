@@ -1,0 +1,59 @@
+# Code-review example only. No GPU training or deployment is authorized by this file.
+# Explicit domain adaptation: upstream per-camera encoders, not the paper state network.
+schema_version: 1
+backend: official_idql_jax
+output_dir: outputs/idql_official_pixels
+cache_dir: cache
+adapter:
+  mode: pixels
+  pixels:
+    architecture: upstream_pixel_multiplexer_d4pg
+    camera_layout: separate_rgb_views
+    encoder_features: [32, 32, 32, 32]
+    encoder_filters: [3, 3, 3, 3]
+    encoder_strides: [2, 1, 1, 1]
+    latent_dim: 50
+    # Original upstream batched_random_crop; train only, independent cameras/ranks.
+    random_crop_pad: 4
+data:
+  image_size: 64
+  validation_fraction: 0.2
+  seed: 7
+  split_strategy: haizhou_hash_threshold
+  # Bind the full original native membership for an existing experiment.
+  frozen_members: null
+  normalization: null
+training:
+  optimizer_updates: 45000
+  global_batch_size: 64
+  per_device_batch_size: 32
+  gradient_accumulation_steps: 1
+  seed: 7
+  checkpoint_interval: 2500
+  validation_interval: 500
+  validation_batch_size: 64
+  sampling: replacement
+critic:
+  hidden_dims: [256, 256]
+  critic_lr: 0.0003
+  value_lr: 0.0003
+  expectile: 0.7
+  tau: 0.005
+diagnostics:
+  beta: 3.0
+  max_weight: 20.0
+  # Verified native same-state human/original-failure pairs; never infer from progress.
+  same_state_pairs: null
+  thresholds:
+    rho_max: -0.5
+    trajectory_median_max: -0.3
+    human_higher_fraction_min: 0.5
+    same_state_higher_fraction_min: 0.5
+    ess_fraction_min: 0.1
+    success_terminal_weight_share_max: 0.5
+runtime:
+  platform: gpu
+  device_count: 2
+frozen_behavior:
+  policy_id: null
+  actor_sha256: null

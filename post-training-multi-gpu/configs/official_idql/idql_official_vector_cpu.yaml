@@ -1,0 +1,28 @@
+# CPU integration example; vector mode observes normalized proprioception only.
+schema_version: 1
+backend: official_idql_jax
+output_dir: outputs/idql_official_vector_cpu
+cache_dir: cache
+adapter:
+  mode: vector
+  vector_source: normalized_proprio
+data:
+  image_size: 16
+  validation_fraction: 0.5
+  seed: 7
+  split_strategy: hash_rank_count
+  frozen_members: null
+training:
+  optimizer_updates: 5
+  global_batch_size: 4
+  per_device_batch_size: 4
+  gradient_accumulation_steps: 1
+  checkpoint_interval: 2
+  validation_interval: 2
+  validation_batch_size: 4
+  log_interval: 1
+critic:
+  hidden_dims: [16, 16]
+runtime:
+  platform: cpu
+  device_count: 1
