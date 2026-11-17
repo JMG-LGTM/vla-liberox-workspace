@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "post-training-multi-gpu"
+version = "0.1.0"
+description = "Standalone pi0.5 BC, IQL and critic post-training"
+requires-python = ">=3.11,<3.13"
+dependencies = ["numpy>=1.26,<3", "PyYAML>=6,<7", "Pillow>=10", "torch>=2.6,<2.8", "tensorboard>=2.15,<3", "huggingface-hub>=0.30,<1", "safetensors>=0.4,<1"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9"]
+plot = ["matplotlib>=3.8,<4"]
+idql-official = ["jax==0.5.3", "jaxlib==0.5.3", "flax==0.10.2", "optax==0.2.4", "gym==0.26.2"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+exclude = ["*.__pycache__*"]
+
+[tool.setuptools.package-data]
+post_training = ["_vendor/idql_official/*.py", "_vendor/idql_official/*.md", "_vendor/idql_official/*.txt", "_vendor/idql_official/UPSTREAM.json", "_vendor/idql_official/**/*.py", "_vendor/idql_official/**/*.md"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra"

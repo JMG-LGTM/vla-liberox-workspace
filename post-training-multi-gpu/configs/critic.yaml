@@ -1,0 +1,30 @@
+schema_version: 1
+method: critic
+output_dir: outputs/critic
+cache_dir: cache
+data:
+  validation_fraction: 0.2
+  seed: 7
+training:
+  global_batch_size: 256
+  per_device_batch_size: 32
+  gradient_accumulation_steps: auto
+  optimizer_updates: 15000
+  warmup_updates: 0
+  seed: 7
+  validation_interval: 500
+  checkpoint_interval: 1000
+  log_interval: 50
+  zero_optimizer: true
+critic:
+  optimizer: adamw
+  weight_decay: 0.01
+  image_size: 128
+  learning_rate: 0.0003
+  value_learning_rate: 0.0003
+  expectile: 0.8
+  random_shift_pad: 4
+  beta: 3.0
+  max_weight: 20.0
+distributed:
+  workers_per_rank: 2

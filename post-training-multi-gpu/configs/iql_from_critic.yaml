@@ -1,0 +1,41 @@
+# Recommended IQL stage after critic.yaml selects outputs/critic/critic_best.pt.
+# Frozen actor budget and sampling match BC50; pass data/bc50 for the same actor
+# members. All selected policy data is used, so IQL critic metrics are training
+# diagnostics; only the preceding critic stage reports held-out validation.
+schema_version: 1
+method: iql
+output_dir: outputs/iql_from_critic
+cache_dir: cache
+model:
+  checkpoint: models/pi05_liberox_torch
+  backbone: frozen
+  dtype: bfloat16
+data:
+  validation_fraction: 0.0
+  seed: 7
+training:
+  global_batch_size: 16
+  per_device_batch_size: 2
+  gradient_accumulation_steps: auto
+  optimizer_updates: 800
+  warmup_updates: 80
+  learning_rate: 0.00003
+  final_learning_rate: 0.000003
+  seed: 7
+  checkpoint_interval: 100
+  checkpoint_format: sharded
+  validation_interval: 500
+  log_interval: 10
+  sampling: replacement
+critic:
+  optimizer: adamw
+  weight_decay: 0.01
+  image_size: 128
+  expectile: 0.8
+  init_checkpoint: outputs/critic/critic_best.pt
+  warmup_updates: 0
+  random_shift_pad: 4
+  beta: 3.0
+  max_weight: 20.0
+distributed:
+  workers_per_rank: 2

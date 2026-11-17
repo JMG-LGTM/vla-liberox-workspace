@@ -1,0 +1,80 @@
+schema_version: 1
+method: iql
+output_dir: /data/liberox_jmg_borrowed_a100_20261028/experiments/iql_scene24_L1_pi05liberox_plus_fail16_b64_s30000_20261101/runs/production
+cache_dir: /data/liberox_jmg_borrowed_a100_20261028/experiments/iql_scene24_L1_pi05liberox_plus_fail16_b64_s30000_20261101/cache/replay
+model:
+  checkpoint: /data/liberox_jmg_borrowed_a100_20261028/runtime-source/models/pi05_liberox_torch
+  backbone: full
+  dtype: bfloat16
+  num_inference_steps: 10
+  vision_gradient_checkpointing: true
+  actor_init_policy: null
+data:
+  action_horizon: 8
+  action_dim: 7
+  proprio_dim: 8
+  include_post_success: false
+  image_flip_vertical: true
+  image_flip_horizontal: false
+  validation_fraction: 0.2
+  seed: 7
+  normalization: null
+  split_strategy: haizhou_hash_threshold
+training:
+  global_batch_size: 64
+  per_device_batch_size: 32
+  gradient_accumulation_steps: 1
+  optimizer_updates: 30000
+  seed: 7
+  learning_rate: 3.0e-06
+  final_learning_rate: 3.0e-07
+  warmup_updates: 1000
+  weight_decay: 1.0e-10
+  grad_clip: 1.0
+  checkpoint_interval: 2500
+  checkpoint_format: sharded
+  log_interval: 1
+  validation_interval: 500
+  bc_validation: false
+  validation_batch_size: 8
+  validation_seed: 17007
+  tensorboard: true
+  zero_optimizer: true
+  adamw_foreach: false
+  sampling: replacement
+  deterministic: false
+critic:
+  image_size: 128
+  learning_rate: 0.0003
+  value_learning_rate: 0.0003
+  optimizer: adamw
+  weight_decay: 0.01
+  grad_clip: 10.0
+  expectile: 0.8
+  tau: 0.005
+  beta: 3.0
+  max_weight: 20.0
+  random_shift_pad: 4
+  warmup_updates: 0
+  init_checkpoint: /data/liberox_jmg_borrowed_a100_20261028/experiments/iql_scene24_L1_manip_off_bc15000_plus_fail16_b64_s30000_20261101/runs/critic_pretrain/critic_best.pt
+reward:
+  type: sparse
+  step_reward: -1.0
+  success_reward: 0.0
+  discount: 0.99
+  discount_unit: chunk
+  normalize: false
+  success_consecutive_steps: 5
+  termination_rule: success_aware_recording_end_v1
+distributed:
+  device: cuda
+  backend: nccl
+  timeout_seconds: 3600
+  workers_per_rank: 2
+  prefetch_factor: 2
+  pin_memory: true
+  gradient_as_bucket_view: true
+actor_bc:
+  dataset_root: /data/liberox_jmg_borrowed_a100_20261028/experiments/iql_scene24_L1_pi05liberox_plus_fail16_b64_s30000_20261101/data/official2_bc_package
+  weight: 0.1
+  per_device_batch_size: 1

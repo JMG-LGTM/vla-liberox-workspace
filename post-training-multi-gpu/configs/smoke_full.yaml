@@ -1,0 +1,25 @@
+# Server full-model memory smoke: two real pi0.5 updates on 8 GPUs.
+# The last update saves a sharded checkpoint and exports a policy package.
+# Prepare weights and data separately before running this configuration.
+schema_version: 1
+method: bc
+output_dir: outputs/smoke_full
+model:
+  checkpoint: models/pi05_liberox_torch
+  backbone: full
+data:
+  validation_fraction: 0.0
+training:
+  global_batch_size: 8
+  per_device_batch_size: 1
+  gradient_accumulation_steps: auto
+  optimizer_updates: 2
+  warmup_updates: 1
+  checkpoint_interval: 2
+  checkpoint_format: sharded
+  log_interval: 1
+  zero_optimizer: true
+distributed:
+  device: cuda
+  backend: nccl
+  workers_per_rank: 2
