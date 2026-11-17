@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 from contract import POLICY_ID,STEP,validate_contract,require,atomic_json
 
+# Scene24 L1 instruction, matching the saved observation used for the smoke check; change both for another task.
 PROMPT='place the green bowl onto the plate that is in the table center and place the black bowl onto the plate that is next to the blue bowl'
 
 def main(argv=None):

@@ -29,6 +29,8 @@ SAMPLING = {'recipe':'bc_anchor_single1_plus_independent3_v1',
     'extra_domain':'extra3','selection_domain':'selector'}
 
 
+# The 'bc78-n4-v1' label is part of the seed derivation used by the 73/100 and 76/100 runs.
+# It is only a name, but changing it changes every candidate; keep it to reproduce those runs.
 def derive_seed(domain, seed):
     if domain not in ('extra3','selector') or type(seed) is not int:
         raise ValueError('Invalid independent noise seed domain')
@@ -132,6 +134,7 @@ class CandidateRuntime:
     @torch.inference_mode()
     def infer(self, observation, *, remaining_steps, mode='greedy', generator=None):
         from post_training.replay import normalize, _pixels
+        # 950 = episode length of the evaluation protocol (contract.py).
         if type(remaining_steps) is not int or not 1 <= remaining_steps <= 950:
             raise ValueError('Remaining executed action count must be in1..950')
         if mode != 'greedy' or generator is not None:

@@ -125,6 +125,7 @@ def main():
             if request['op']=='seed':
                 runtime.reset_seed(int(request['seed']));seeded,queries=True,0;reply({'ok':True});continue
             require(request['op']=='infer' and seeded,'Official IDQL inference requires a trial seed')
+            # 950-step episode, 8 executed steps per query: the protocol in contract.py.
             remaining=950-8*queries
             require(remaining>0 and request['remaining_steps']==remaining,'Worker/provider query count differs')
             with np.load(io.BytesIO(base64.b64decode(request['arrays'])),allow_pickle=False) as arrays:

@@ -11,6 +11,7 @@ from post_training.data import verify_dataset
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("data", type=Path, help="A package, or parent containing bc50/ and scene23_61/")
+    # Default is the SCENE23 L2 dataset repository of the first experiments; pass --repo-id for any other dataset.
     parser.add_argument("--repo-id", default="JMG-NTU123/liberox-scene23-l2-posttrain")
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--execute", action="store_true", help="Perform the upload after owner approval; otherwise only verify and print a plan")

@@ -104,6 +104,8 @@ def attach_official_demonstrations(native_root: str | Path, official_root: str |
         raise ValueError("Attach requires an unmodified native-only package")
     if output.exists() or output.is_relative_to(native_root) or output.is_relative_to(official_root):
         raise ValueError("Output must be a new directory outside both inputs")
+    # Hard-coded for Scene24 L1: exactly the two official LIBERO-X demonstrations of its task
+    # (meituan/LIBERO-X episodes 1719 and 1720, task 264). Other scenes need these values made configurable.
     prepared = json.loads((official_root / "processed_manifest.json").read_text())
     if (prepared.get("kind") != "official_human_bc_intermediate" or prepared.get("source_repository") != REPOSITORY
             or prepared.get("source_revision") != REVISION or prepared.get("episode_count") != 2
@@ -133,6 +135,7 @@ def attach_official_demonstrations(native_root: str | Path, official_root: str |
         for name in ("source_manifest.json", "processed_manifest.json", "validation.json"):
             copy_original(name)
         for metadata in prepared["episodes"]:
+            # Task 264 is the Scene24 L1 task (see the episode check above).
             if metadata["task_index"] != 264 or any(ep["prompt"] != metadata["prompt"] for ep in native["episodes"]):
                 raise ValueError("Official Scene24 instruction differs from selected native training paths")
             directory = "processed/episode_%06d" % metadata["episode_index"]

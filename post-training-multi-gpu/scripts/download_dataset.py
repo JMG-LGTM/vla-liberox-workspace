@@ -11,6 +11,7 @@ from post_training.data import verify_dataset
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    # Default is the SCENE23 L2 dataset repository of the first experiments; pass --repo-id for any other dataset.
     parser.add_argument("--repo-id", default="JMG-NTU123/liberox-scene23-l2-posttrain")
     parser.add_argument("--revision", default="main", help="Pin the dataset commit for reproducible downloads")
     parser.add_argument("--output", type=Path, required=True)

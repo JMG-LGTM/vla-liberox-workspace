@@ -38,6 +38,8 @@ def inspect_actor_bc(root, config, native_info, *, verify=True):
     if (manifest.get("action_horizon"), manifest.get("action_dim"), manifest.get("proprio_dim")) != (8, 7, 8):
         raise ValueError("Official actor BC package geometry differs")
     demos = manifest.get("bc_demonstrations", [])
+    # Hard-coded for Scene24 L1: exactly the two official LIBERO-X demonstrations of its task
+    # (meituan/LIBERO-X episodes 1719 and 1720, task 264). Other scenes need these values made configurable.
     if sorted(ep.get("episode_index") for ep in demos) != [1719, 1720]:
         raise ValueError("Expected exactly the two pinned Scene24 official demonstrations")
     for ep in demos:

@@ -87,6 +87,7 @@ class IDQLProvider(OriginalProvider):
         with self._lock:
             require(self.loaded and self._seeded, 'IDQL prediction requires an owned loaded worker and trial seed')
             require(not disabled_policy_cameras, 'IDQL protocol has no disabled cameras')
+            # 950-step episode, 8 executed steps per query: the protocol in contract.py.
             remaining = 950-8*self._queries
             require(remaining > 0, 'Unexpected extra IDQL query beyond950 actions')
             from trajectory_utils import quaternion_to_axis_angle

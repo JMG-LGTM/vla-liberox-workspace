@@ -52,6 +52,19 @@ Scene24 L1 实验（BC78 / BC v2 75 分，IDQL 73 / 76 分）用的就是这个�
 
 详细说明见 [idql_eval/README.md](idql_eval/README.md)。IDQL 不经过 `pt/algorithms.py` 和 `pt/iql/`。
 
+### 写死的地方
+
+训练和 IDQL 的核心代码只认数据包，不针对某个场景。下面这些地方是写死的，代码里都有注释：
+
+| 位置 | 写死的内容 | 换场景时 |
+|---|---|---|
+| `pt/official_bc.py`、`pt/iql/actor_bc.py` | 官方示教固定为 LIBERO-X 的第 1719、1720 两条（Scene24 L1，任务 264） | 不加官方示教就不受影响；要加别的任务的示教，需要把这几个值改成配置项 |
+| `idql_eval/contract.py`、`provider.py`、`idql_worker.py`、`runtime_core.py` | 评测协议：每局 950 步，每次执行 8 步，20 Hz | 平台评测协议不同时要改这几处 |
+| `idql_eval/gpu_smoke.py` | 小测用的 Scene24 L1 指令 | 换任务时连同保存的观测一起换 |
+| `idql_eval/runtime_core.py`（`derive_seed`） | 种子名里的 `bc78-n4-v1` | 只是名字。改了会让所有候选变掉，和 73、76 分两次的结果对不上，建议保留 |
+| `scripts/upload_dataset.py`、`download_dataset.py` | 默认 HuggingFace 仓库是最早 SCENE23 L2 的数据 | 用 `--repo-id` 指定 |
+| `pt/data.py`（上传数据时生成的说明文字） | 标题写着 "SCENE23 L2" | 只影响 HuggingFace 上的说明文字。这个文件是 IDQL 打分器核对指纹的文件之一，所以没在代码里加注释 |
+
 
 This branch contains training code, tests, generic configuration examples and
 usage documentation. The official IDQL entry point is `train_idql_official.py`.
