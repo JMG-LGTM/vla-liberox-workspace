@@ -11,7 +11,7 @@ import yaml
 
 from post_training import training
 from post_training.config import DEFAULTS, load_config, validate_config
-from post_training.critic import read_critic_metadata
+from post_training.iql.critic import read_critic_metadata
 from post_training.distributed import OptimizerGroup
 from test_training import configuration, runner_dataset
 
@@ -50,7 +50,9 @@ def test_runner_uses_selected_optimizer_for_both_q_and_value(
     config["critic"].update(optimizer=name, weight_decay=decay,
                             learning_rate=2e-4, value_learning_rate=4e-4)
     config["training"]["checkpoint_format"] = "sharded"
-    real_group = training.OptimizerGroup
+    # Critic optimizers are built in algorithms.py from post_training.distributed.
+    from post_training import distributed as distributed_module
+    real_group = distributed_module.OptimizerGroup
     created = []
 
     def record_group(*args, **kwargs):
@@ -58,7 +60,7 @@ def test_runner_uses_selected_optimizer_for_both_q_and_value(
         created.append(group)
         return group
 
-    monkeypatch.setattr(training, "OptimizerGroup", record_group)
+    monkeypatch.setattr(distributed_module, "OptimizerGroup", record_group)
     result = training.train(config, runner_dataset)
     assert result["status"] == "COMPLETED"
     assert len(created) == 2

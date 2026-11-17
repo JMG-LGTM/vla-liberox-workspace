@@ -156,7 +156,7 @@ explicitly supplied model. For standalone inspection, omitting the expected
 arguments constructs a model from the export and returns its metadata:
 
 ```python
-from post_training.critic import load_critic
+from post_training.iql.critic import load_critic
 
 critic, metadata = load_critic("outputs/critic/critic.pt")
 critic.eval()

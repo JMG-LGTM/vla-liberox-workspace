@@ -1,4 +1,4 @@
-"""One audited full-state IQL continuation; ordinary resume remains exact.
+"""IQL only. One audited full-state IQL continuation; ordinary resume remains exact.
 
 The donor checkpoint is never rewritten. Its original manifest, common payload
 and both rank shards are loaded against its original contract. Only the new

@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from post_training.config import DEFAULTS, actor_learning_rate, batch_plan, load_config, validate_config
-from post_training.critic import PixelIQL
+from post_training.iql.critic import PixelIQL
 
 
 def test_bc50_update_units_and_world_sizes():

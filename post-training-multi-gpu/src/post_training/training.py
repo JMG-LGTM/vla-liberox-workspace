@@ -1,4 +1,7 @@
-"""Optimizer-step BC / IQL / critic runner on one node, with CPU test support."""
+"""Shared optimizer-step runner for BC, IQL and critic-only training, on one node (CPU test support).
+
+What differs between the methods is in algorithms.py; IQL-only components are in iql/.
+"""
 from __future__ import annotations
 
 import copy
@@ -21,6 +24,7 @@ import yaml
 from torch.utils.data import DataLoader
 
 from .checkpoint import load_checkpoint, save_checkpoint, rng_state, restore_rng
+from .algorithms import build_algorithm, critic_model_config
 from .config import actor_learning_rate, batch_plan, validate_config
 from .distributed import (GlobalBatchSampler, OptimizerGroup, active, all_rank_call, initialize,
                           primary_call, rank, reduce_metrics, unwrap, world_size, wrap)
@@ -58,7 +62,8 @@ def dry_run(config, data_root, world):
     from .preflight import environment_report
     environment = environment_report(config, world)
     data = inspect_dataset(data_root, config, verify=True)
-    from .actor_bc import inspect_actor_bc
+    # IQL only (None for BC): official-demonstration auxiliary, BC-initialized actor, pretrained critic.
+    from .iql.actor_bc import inspect_actor_bc
     actor_bc_auxiliary = inspect_actor_bc(config["actor_bc"]["dataset_root"], config, data)
     if not data["train_count"]:
         raise ValueError("No training samples")
@@ -73,18 +78,18 @@ def dry_run(config, data_root, world):
         from .pi05_assets import checkpoint_identity, platform_model_settings
         identity = checkpoint_identity(config["model"]["checkpoint"])
         platform_model_settings(config["model"], identity)
-    from .actor_init import inspect_actor_init_policy
+    from .iql.actor_init import inspect_actor_init_policy
     actor_initialization = inspect_actor_init_policy(config["model"]["actor_init_policy"],
         identity=identity, model_config=config["model"])
     initialization = None
     if config["critic"]["init_checkpoint"]:
-        from .critic import default_input_spec, read_critic_metadata
+        from .iql.critic import default_input_spec, read_critic_metadata
         from .replay import load_normalization_file
         normalization = (load_normalization_file(config["data"]["normalization"])
                          if config["data"]["normalization"] else None)
         metadata = read_critic_metadata(config["critic"]["init_checkpoint"],
-                    expected_model_config=_critic_model_config(config),
-                    expected_input_spec=default_input_spec(_critic_model_config(config), config["critic"]["image_size"]),
+                    expected_model_config=critic_model_config(config),
+                    expected_input_spec=default_input_spec(critic_model_config(config), config["critic"]["image_size"]),
                     expected_normalization=normalization,
                     expected_reward_definition=config["reward"],
                     expected_termination_rule=config["reward"]["termination_rule"])
@@ -104,17 +109,6 @@ def dry_run(config, data_root, world):
             "reward_definition": config["reward"], "output_dir": config["output_dir"],
             "sampling": config["training"]["sampling"],
             "note": "Optimizer updates count complete accumulation boundaries; IQL includes extra critic warmup."}
-
-
-def _new_critic(config):
-    from .critic import PixelIQL
-    return PixelIQL(**_critic_model_config(config))
-
-
-def _critic_model_config(config):
-    return dict(horizon=config["data"]["action_horizon"], action_dim=config["data"]["action_dim"],
-                proprio_dim=config["data"]["proprio_dim"], pixel_channels=6,
-                discount=config["reward"]["discount"], expectile=config["critic"]["expectile"], tau=config["critic"]["tau"])
 
 
 def _sample_counters(plan, update, *, actor, critic):
@@ -226,46 +220,16 @@ def _finite_loss(loss, device):
 
 def optimization_step(config, batches, actor, critic, optimizers, device, *, actor_update,
                       official_bc_batches=None):
-    """One effective batch, preserving V -> Q -> target -> actor update order."""
-    from .critic import augment_batch
+    """One effective batch: the method's critic update (IQL), then the shared actor update.
+
+    Method-specific parts live in algorithms.py; the order V -> Q -> target -> actor is kept.
+    """
+    algorithm = build_algorithm(config)
     accumulation = len(batches)
     if accumulation < 1:
         raise ValueError("An optimizer update requires at least one microbatch")
-    auxiliary = config["actor_bc"]["dataset_root"] is not None
-    if auxiliary and actor_update is not None and (accumulation != 1 or official_bc_batches is None
-                                                   or len(official_bc_batches) != accumulation):
-        raise ValueError("Official BC auxiliary requires one combined actor batch and one backward")
-    if not auxiliary and official_bc_batches is not None:
-        raise ValueError("Official BC batch supplied to pure IQL/BC")
-    combined_batches = None
-    if auxiliary and actor_update is not None:
-        from .actor_bc import actor_batch
-        combined_batches = []
-        for native, official in zip(batches, official_bc_batches):
-            if official["raw_actions"].shape[0] != config["actor_bc"]["per_device_batch_size"]:
-                raise ValueError("Official BC sample count differs from the actor batch contract")
-            combined_batches.append(actor_batch(native, official))
-    metrics = {}
-    if critic is not None:
-        # Only small uint8 critic inputs remain resident across the two stages.
-        augmented = [augment_batch(_tensor_batch(batch, device), config["critic"]["random_shift_pad"]) for batch in batches]
-        for stage, key, module_names in [("value", "v_loss", ["value"]), ("q", "q_loss", ["q1", "q2"])]:
-            optimizer = optimizers[stage]
-            optimizer.zero_grad()
-            losses = []
-            for index, batch in enumerate(augmented):
-                context = critic.no_sync() if hasattr(critic, "no_sync") and index + 1 < accumulation else nullcontext()
-                with context:
-                    result = critic(batch, stage=stage)
-                    loss = result[key].mean()
-                    _finite_loss(loss, device)
-                    (loss / accumulation).backward()
-                losses.append(float(loss.detach()))
-            parameters = [p for name in module_names for p in getattr(unwrap(critic), name).parameters()]
-            metrics[f"{stage}_grad_norm"] = _finite_step(optimizer, parameters, config["critic"]["grad_clip"], device)
-            metrics[key] = sum(losses) / accumulation
-        unwrap(critic).update_targets()
-        del augmented
+    actor_inputs = algorithm.actor_inputs(batches, official_bc_batches, actor_update)
+    metrics = algorithm.update_critic(batches, critic, optimizers, device)
     if actor is not None and actor_update is not None:
         cfg = config["training"]
         optimizer = optimizers["actor"]
@@ -276,60 +240,26 @@ def optimization_step(config, batches, actor, critic, optimizers, device, *, act
         for group in optimizer.param_groups:
             group["lr"] = lr
         optimizer.zero_grad()
-        actor_losses, unweighted_losses, weights_mean = [], [], []
-        native_iql_losses, official_losses, auxiliary_losses = [], [], []
-        advantages_mean, advantages_second_moment, weights_second_moment, clipped = [], [], [], []
-        for index, batch in enumerate(batches):
-            actor_inputs, native_batch = batch, batch
-            native_count = batch["action_mask"].shape[0]
-            if auxiliary:
-                actor_inputs, native_batch, native_count = combined_batches[index]
-            scores = (unwrap(critic).scores(_tensor_batch(native_batch, device), beta=config["critic"]["beta"],
-                      max_weight=config["critic"]["max_weight"]) if critic is not None else None)
-            weight = scores["weights"] if scores is not None else None
+        record = {"actor_losses": [], "unweighted_losses": [], "weights_mean": []}
+        for index, (inputs, native_batch, native_count) in enumerate(actor_inputs):
+            scores = algorithm.actor_scores(critic, native_batch, device)
             context = actor.no_sync() if hasattr(actor, "no_sync") and index + 1 < accumulation else nullcontext()
             with context:
-                losses = actor(actor_inputs)
-                if losses.ndim != 1 or losses.shape[0] != batch["action_mask"].shape[0]:
+                losses = actor(inputs)
+                if losses.ndim != 1 or losses.shape[0] != batches[index]["action_mask"].shape[0]:
                     raise ValueError("Policy must return one scalar loss per sample")
-                native_losses = losses[:native_count]
-                native_loss = native_losses.mean() if weight is None else (native_losses * weight).mean()
-                if auxiliary:
-                    official_loss = losses[native_count:].mean()
-                    auxiliary_loss = config["actor_bc"]["weight"] * official_loss
-                    loss = native_loss + auxiliary_loss
-                    native_iql_losses.append(float(native_loss.detach()))
-                    official_losses.append(float(official_loss.detach()))
-                    auxiliary_losses.append(float(auxiliary_loss.detach()))
-                else:
-                    loss = native_loss
+                loss = algorithm.actor_loss(losses, native_count, scores, record)
                 _finite_loss(loss, device)
                 (loss / accumulation).backward()
-            actor_losses.append(float(loss.detach()))
-            unweighted_losses.append(float(native_losses.detach().mean()))
-            weights_mean.append(float(weight.mean()) if weight is not None else 1.0)
-            if scores is not None:
-                advantage = scores["advantage"].double()
-                advantages_mean.append(float(advantage.mean()))
-                advantages_second_moment.append(float(advantage.square().mean()))
-                weights_second_moment.append(float(weight.double().square().mean()))
-                clipped.append(float((config["critic"]["beta"] * advantage >=
-                                      math.log(config["critic"]["max_weight"])).double().mean()))
+            record["actor_losses"].append(float(loss.detach()))
+            record["unweighted_losses"].append(float(losses[:native_count].detach().mean()))
+            record["weights_mean"].append(float(scores["weights"].mean()) if scores is not None else 1.0)
         parameters = [parameter for parameter in actor.parameters() if parameter.requires_grad]
         metrics["actor_grad_norm"] = _finite_step(optimizer, parameters, cfg["grad_clip"], device)
-        metrics.update(actor_loss=sum(actor_losses) / accumulation,
-                       unweighted_actor_loss=sum(unweighted_losses) / accumulation, learning_rate=lr,
-                       actor_weight_mean=sum(weights_mean) / accumulation)
-        if advantages_mean:
-            metrics.update(advantage_mean=sum(advantages_mean) / accumulation,
-                advantage_second_moment=sum(advantages_second_moment) / accumulation,
-                actor_weight_second_moment=sum(weights_second_moment) / accumulation,
-                actor_weight_clip_fraction=sum(clipped) / accumulation)
-        if auxiliary:
-            metrics.update(native_iql_actor_loss=sum(native_iql_losses) / accumulation,
-                official_bc_loss=sum(official_losses) / accumulation,
-                official_bc_aux_loss=sum(auxiliary_losses) / accumulation,
-                unweighted_native_actor_loss=sum(unweighted_losses) / accumulation)
+        metrics.update(actor_loss=sum(record["actor_losses"]) / accumulation,
+                       unweighted_actor_loss=sum(record["unweighted_losses"]) / accumulation, learning_rate=lr,
+                       actor_weight_mean=sum(record["weights_mean"]) / accumulation)
+        metrics.update(algorithm.actor_metrics(record, accumulation))
     return metrics
 
 
@@ -463,7 +393,7 @@ def _best_export_name(run_dir, update):
 def _train(config, data_root, device, resume, stopping):
     from .continuation import (check_resume_location, comparable_config, prepare_donor_load,
                                SOURCE_UPDATE)
-    from .critic import default_input_spec, export_critic, load_critic, read_critic_metadata
+    from .iql.critic import default_input_spec, export_critic, read_critic_metadata
     from .data import inspect_dataset
     from .diagnostics import evaluate_critic
     from .replay import CachedReplayDataset, build_replay_cache, load_normalization_file
@@ -486,14 +416,15 @@ def _train(config, data_root, device, resume, stopping):
         if config["method"] != "critic":
             from .pi05_assets import checkpoint_identity
             identity = checkpoint_identity(config["model"]["checkpoint"])
-        from .actor_init import inspect_actor_init_policy
+        # IQL only (None for BC): BC-initialized actor, pretrained critic, official-demonstration cache.
+        from .iql.actor_init import inspect_actor_init_policy
         actor_initialization = inspect_actor_init_policy(config["model"]["actor_init_policy"],
             identity=identity, model_config=config["model"])
         normalization, initialization = None, None
         if config["critic"]["init_checkpoint"]:
             metadata = read_critic_metadata(config["critic"]["init_checkpoint"],
-                expected_model_config=_critic_model_config(config),
-                expected_input_spec=default_input_spec(_critic_model_config(config), config["critic"]["image_size"]),
+                expected_model_config=critic_model_config(config),
+                expected_input_spec=default_input_spec(critic_model_config(config), config["critic"]["image_size"]),
                 expected_reward_definition=config["reward"],
                 expected_termination_rule=config["reward"]["termination_rule"])
             normalization = metadata["normalization"]
@@ -504,7 +435,7 @@ def _train(config, data_root, device, resume, stopping):
                     raise ValueError("Explicit normalization differs from critic initialization")
         print("Preparing verified replay cache (CPU); no per-sample NPZ reads during training", flush=True)
         cache, reused = build_replay_cache(data_root, Path(config["cache_dir"]), config, norm_stats=normalization)
-        from .actor_bc import build_actor_bc_cache
+        from .iql.actor_bc import build_actor_bc_cache
         auxiliary = build_actor_bc_cache(config["actor_bc"]["dataset_root"],
             Path(config["cache_dir"]) / "official_actor_bc", config, info)
         result = {"cache": str(cache), "cache_reused": reused, "dataset_sha256": info["dataset_sha256"],
@@ -532,34 +463,23 @@ def _train(config, data_root, device, resume, stopping):
     if device.type == "cuda":
         torch.cuda.manual_seed(cfg["seed"])
     torch.use_deterministic_algorithms(cfg["deterministic"])
+    algorithm = build_algorithm(config)
     actor, critic, optimizers = None, None, {}
-    if config["method"] != "critic":
+    if algorithm.trains_actor:
         from .policy import load_policy
         actor = load_policy(config["model"], device, verified_identity=prepared["model_identity"])
+        # IQL only: warm start the actor from a trained BC policy package.
         if not resume and prepared["actor_initialization"] is not None:
-            from .actor_init import initialize_actor_from_policy
+            from .iql.actor_init import initialize_actor_from_policy
             all_rank_call(lambda: initialize_actor_from_policy(actor, prepared["actor_initialization"]))
         actor = wrap(actor, device, unused=True, move_inputs=False,
                      gradient_as_bucket_view=config["distributed"]["gradient_as_bucket_view"])
         optimizers["actor"] = OptimizerGroup(actor.parameters(), zero=cfg["zero_optimizer"],
             lr=cfg["learning_rate"], betas=(.9, .95), eps=1e-8, weight_decay=cfg["weight_decay"],
             foreach=cfg["adamw_foreach"])
-    if config["method"] != "bc":
-        critic = _new_critic(config)
-        if config["critic"]["init_checkpoint"]:
-            load_critic(config["critic"]["init_checkpoint"], critic,
-                expected_input_spec=default_input_spec(critic, config["critic"]["image_size"]),
-                expected_normalization=normalization, expected_reward_definition=config["reward"],
-                expected_termination_rule=config["reward"]["termination_rule"])
-        critic = wrap(critic.to(device), device, unused=True,
-                      gradient_as_bucket_view=config["distributed"]["gradient_as_bucket_view"])
-        critic_optimizer_class = {"adamw": torch.optim.AdamW, "adam": torch.optim.Adam}[config["critic"]["optimizer"]]
-        optimizers["q"] = OptimizerGroup([*unwrap(critic).q1.parameters(), *unwrap(critic).q2.parameters()],
-            zero=cfg["zero_optimizer"], optimizer_class=critic_optimizer_class,
-            lr=config["critic"]["learning_rate"], weight_decay=config["critic"]["weight_decay"])
-        optimizers["value"] = OptimizerGroup(unwrap(critic).value.parameters(), zero=cfg["zero_optimizer"],
-            optimizer_class=critic_optimizer_class, lr=config["critic"]["value_learning_rate"],
-            weight_decay=config["critic"]["weight_decay"])
+    # IQL / critic-only: PixelIQL critic and its Q and V optimizers (algorithms.py). BC: none.
+    critic, critic_optimizers, critic_optimizer_class = algorithm.build_critic(device, normalization)
+    optimizers.update(critic_optimizers)
 
     effective = copy.deepcopy(config)
     effective["training"]["gradient_accumulation_steps"] = plan["gradient_accumulation_steps"]
@@ -569,6 +489,7 @@ def _train(config, data_root, device, resume, stopping):
                 "cache_fingerprint": dataset.metadata["fingerprint"], "world_size": world_size(),
                 "model_identity_sha256": stable_hash(prepared["model_identity"]),
                 "critic_initialization_sha256": stable_hash(prepared["critic_initialization"]),
+                # The next IQL-only fields are None / 0 for BC.
                 "actor_initialization_sha256": stable_hash(prepared["actor_initialization"]),
                 "actor_bc_auxiliary_sha256": stable_hash(prepared["actor_bc_auxiliary"]),
                 "actor_bc_dataset_sha256": (prepared["actor_bc_auxiliary"]["dataset_sha256"]
@@ -653,6 +574,7 @@ def _train(config, data_root, device, resume, stopping):
     validation_loader = (_loader(validation, config, validation=True)
                          if rank() == 0 and (critic is not None or cfg["bc_validation"]) else None)
     iterator = iter(loader)
+    # IQL only: sampler of the official-demonstration auxiliary (iql/actor_bc.py).
     official_iterator = None
     if prepared["actor_bc_auxiliary"] is not None:
         official = CachedReplayDataset(prepared["actor_bc_auxiliary"]["cache"], split="train")
@@ -755,6 +677,7 @@ def _train(config, data_root, device, resume, stopping):
                 dist.all_reduce(stop_requested, op=dist.ReduceOp.MAX)
             stopped = bool(stop_requested) and last_update < plan["optimizer_updates"]
             final = last_update == plan["optimizer_updates"] or stopped
+            # IQL / critic-only: held-out critic diagnostics and best-critic export.
             if critic is not None and (last_update % cfg["validation_interval"] == 0 or final):
                 def validate():
                     result = evaluate_critic(unwrap(critic), validation_loader, device,
@@ -780,6 +703,7 @@ def _train(config, data_root, device, resume, stopping):
                         export_current_critic(name, last_update)
                         _atomic_copy(run_dir / name, run_dir / "critic_best.pt")
                     primary_call(export_best)
+            # BC: held-out flow loss on the validation roots.
             if cfg["bc_validation"] and (last_update % cfg["validation_interval"] == 0 or final):
                 evaluation = primary_call(lambda: evaluate_actor(actor, validation_loader, device,
                                                                   seed=cfg["validation_seed"]))

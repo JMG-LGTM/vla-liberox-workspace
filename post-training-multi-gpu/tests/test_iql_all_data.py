@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from post_training import training
-from post_training.critic import read_critic_metadata
+from post_training.iql.critic import read_critic_metadata
 from post_training.data import inspect_dataset, package_dataset
 from post_training.io import sha256_file, stable_hash
 from post_training.replay import CachedReplayDataset
@@ -31,7 +31,7 @@ def test_all_data_iql_inspection_and_dry_run_need_no_holdout_or_policy_loading(
     def forbidden(*args, **kwargs):
         raise AssertionError("Dry run must not instantiate a policy or critic")
     monkeypatch.setattr("post_training.policy.load_policy", forbidden)
-    monkeypatch.setattr(training, "_new_critic", forbidden)
+    monkeypatch.setattr("post_training.algorithms.ImplicitQLearning.build_critic", forbidden)
     info = inspect_dataset(runner_dataset, config)
     assert_all_data_report(info, 8)
     assert {row["split"] for row in info["rows"]} == {"train"}

@@ -12,12 +12,12 @@ import tempfile
 import numpy as np
 import torch
 
-from .archive_io import load_npz_arrays
-from .data import _manifest_identity, grouped_split, safe_path
-from .io import atomic_json, sha256_file, stable_hash
-from .official_bc import (MIXED_FORMAT, CONTRACT, demo_rows, validate_demonstrations,
+from ..archive_io import load_npz_arrays
+from ..data import _manifest_identity, grouped_split, safe_path
+from ..io import atomic_json, sha256_file, stable_hash
+from ..official_bc import (MIXED_FORMAT, CONTRACT, demo_rows, validate_demonstrations,
                           verify_demo_payloads)
-from .replay import CachedReplayDataset, _metadata_hash, validate_cache
+from ..replay import CachedReplayDataset, _metadata_hash, validate_cache
 
 FORMAT = "liberox-official-bc-demonstrations"
 ACTOR_FIELDS = ("raw_actions", "action_mask", "raw_proprio", "agent_image", "wrist_image")
@@ -83,8 +83,9 @@ def build_actor_bc_cache(root, cache_root, config, native_info):
     rows = demo_rows(manifest["bc_demonstrations"], 8, info["root_splits"])
     identity = {"kind": "official_bc_actor_auxiliary_only", "dataset_sha256": info["dataset_sha256"],
         "action_horizon": 8, "split_rows_sha256": stable_hash(rows), "orientation": "as_published_no_flip",
-        "implementation": {name: sha256_file(Path(__file__).with_name(name)) for name in
-            ("actor_bc.py", "official_bc.py", "archive_io.py", "data.py", "replay.py")}}
+        "implementation": {name: sha256_file(Path(__file__).parent.parent / path) for name, path in
+            (("actor_bc.py", "iql/actor_bc.py"), ("official_bc.py", "official_bc.py"), ("archive_io.py", "archive_io.py"),
+             ("data.py", "data.py"), ("replay.py", "replay.py"))}}
     fingerprint = stable_hash(identity)
     cache_root.mkdir(parents=True, exist_ok=True)
     target = cache_root / fingerprint

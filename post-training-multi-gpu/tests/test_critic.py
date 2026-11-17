@@ -6,7 +6,7 @@ import json
 import pytest
 import torch
 
-from post_training.critic import (PixelIQL, QNetwork, advantage_weights, augment_batch,
+from post_training.iql.critic import (PixelIQL, QNetwork, advantage_weights, augment_batch,
                                  chunk_bellman_target, default_input_spec, expectile_loss,
                                  export_critic, load_critic, random_shift_pixels)
 from post_training.diagnostics import (average_ranks, critic_diagnostics, evaluate_critic,

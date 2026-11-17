@@ -16,9 +16,9 @@ from torch import nn
 import yaml
 
 from post_training import training
-from post_training.actor_bc import ACTOR_FIELDS, build_actor_bc_cache, inspect_actor_bc
+from post_training.iql.actor_bc import ACTOR_FIELDS, build_actor_bc_cache, inspect_actor_bc
 from post_training.config import batch_plan, validate_config
-from post_training.critic import PixelIQL
+from post_training.iql.critic import PixelIQL
 from post_training.data import _manifest_identity, grouped_split, inspect_dataset, package_dataset
 from post_training.distributed import OptimizerGroup
 from post_training.replay import CachedReplayDataset
@@ -212,7 +212,7 @@ from pathlib import Path
 import torch
 from post_training import training,policy
 from post_training.config import load_config
-from post_training.critic import PixelIQL
+from post_training.iql.critic import PixelIQL
 from post_training.distributed import unwrap
 from post_training.pi05_assets import checkpoint_identity,load_normalization,platform_model_settings
 from post_training.policy import Pi05Policy

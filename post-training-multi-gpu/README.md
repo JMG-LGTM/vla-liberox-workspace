@@ -4,6 +4,8 @@
 
 Scene24 L1 实验（BC78 / BC v2 75 分，IDQL 73 / 76 分）用的就是这个文件夹里的代码。`src/post_training/` 下的路径简写为 `pt/`。
 
+结构和平台的 `vla_rynn_iql` 一样：`pt/training.py` 是 BC 和 IQL 共用的训练流程；两种方法的区别写在 `pt/algorithms.py` 的 `BehaviorCloning` 和 `ImplicitQLearning` 两个类里；IQL 专用的代码在 `pt/iql/`。
+
 ### BC：π₀.₅ 行为克隆（多卡）
 
 | 步骤 | 文件 · 函数 |
@@ -13,10 +15,20 @@ Scene24 L1 实验（BC78 / BC v2 75 分，IDQL 73 / 76 分）用的就是这个�
 | 数据：按根轨迹划分训练/验证集，把轨迹切成 8 步动作块 | `pt/data.py`（`build_semi_mdp_chunks`、`replay_chunks`） |
 | 缓存：图像、状态和动作的归一化，mmap 读取 | `pt/replay.py`（`build_replay_cache`、`fit_normalization`、`CachedReplayDataset`） |
 | 模型与损失：π₀.₅（OpenPI）前向，flow matching 损失只算真实执行的步 | `pt/policy.py`（`Pi05Policy.forward`、`masked_flow_losses`） |
-| 训练循环：一步优化、验证集损失 | `pt/training.py`（`_train`、`optimization_step`、`evaluate_actor`） |
+| BC 与 IQL 的差别：BC 不训 critic，损失直接取平均 | `pt/algorithms.py`（`BehaviorCloning`） |
+| 共用的训练流程：一步优化、验证集损失 | `pt/training.py`（`_train`、`optimization_step`、`evaluate_actor`） |
 | 多卡：DDP、全局采样、ZeRO-1 | `pt/distributed.py` |
 | 存档和导出成平台模型包 | `pt/checkpoint.py`、`pt/export.py` |
 | 官方示教（只有观测和动作）加入 BC | `pt/official_bc.py` |
+
+### IQL（PyTorch 版，对照用，Scene24 实验中最好 37/50）
+
+| 步骤 | 文件 · 函数 |
+|---|---|
+| 入口 | `train.py --method iql`（只训 critic：`--method critic`） |
+| 与 BC 的差别：先更新 V、Q 和目标网络，再按优势权重加权 actor 损失 | `pt/algorithms.py`（`ImplicitQLearning`、`CriticOnly`） |
+| critic 网络（Q1、Q2、V，PixelIQL） | `pt/iql/critic.py` |
+| 可选：官方示教辅助损失、用 BC 初始化 actor、30000→45000 续训 | `pt/iql/actor_bc.py`、`pt/iql/actor_init.py`、`pt/continuation.py` |
 
 ### IDQL 训练：只训 Q/V，BC 冻结不训
 
@@ -38,7 +50,7 @@ Scene24 L1 实验（BC78 / BC v2 75 分，IDQL 73 / 76 分）用的就是这个�
 | 用 min(Q1, Q2) 打分，执行分最高的那个 | `idql_eval/runtime_core.py`（`infer`） |
 | 接平台评测（不改平台代码） | `idql_eval/provider.py`、`idql_eval/run_idql_evaluation.py` |
 
-详细说明见 [idql_eval/README.md](idql_eval/README.md)。`pt/critic.py`、`pt/actor_init.py`、`pt/actor_bc.py` 和 `pt/continuation.py` 是 IQL 用的，BC 和 IDQL 都不经过。
+详细说明见 [idql_eval/README.md](idql_eval/README.md)。IDQL 不经过 `pt/algorithms.py` 和 `pt/iql/`。
 
 
 This branch contains training code, tests, generic configuration examples and

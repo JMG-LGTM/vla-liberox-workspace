@@ -11,9 +11,9 @@ from pathlib import Path
 
 import torch
 
-from .export import validate_policy_package
-from .io import sha256_file
-from .pi05_assets import IDENTITY_FILE, identity_digest, platform_model_settings
+from ..export import validate_policy_package
+from ..io import sha256_file
+from ..pi05_assets import IDENTITY_FILE, identity_digest, platform_model_settings
 
 
 def _snapshot(path):

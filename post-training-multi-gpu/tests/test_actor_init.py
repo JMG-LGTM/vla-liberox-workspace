@@ -13,7 +13,7 @@ import torch
 import yaml
 
 from post_training import training
-from post_training.actor_init import inspect_actor_init_policy, initialize_actor_from_policy
+from post_training.iql.actor_init import inspect_actor_init_policy, initialize_actor_from_policy
 from post_training.config import DEFAULTS, validate_config
 from post_training.export import export_policy
 from post_training.io import sha256_file, stable_hash
@@ -144,7 +144,7 @@ def test_iql_warmstart_fresh_counters_new_dataset_and_resume_does_not_reinitiali
     def forbidden_initialization(*_args, **_kwargs):
         raise AssertionError("Resume reapplied the original BC actor")
 
-    monkeypatch.setattr("post_training.actor_init.initialize_actor_from_policy", forbidden_initialization)
+    monkeypatch.setattr("post_training.iql.actor_init.initialize_actor_from_policy", forbidden_initialization)
 
     def inspect_resumed_step(*args, **kwargs):
         assert kwargs["actor_update"] == 1
@@ -206,7 +206,7 @@ def test_two_gloo_ranks_warmstart_zero_sharded_resume_is_exact(
     config_path, worker_path = tmp_path / "config.yaml", tmp_path / "warmstart_gloo.py"
     config_path.write_text(yaml.safe_dump(config))
     hook = '''
-import post_training.actor_init as actor_init
+import post_training.iql.actor_init as actor_init
 original_initialize = actor_init.initialize_actor_from_policy
 initialization_calls = []
 def capture_initialization(actor, initialization):

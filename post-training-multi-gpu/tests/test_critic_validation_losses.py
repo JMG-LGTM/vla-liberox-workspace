@@ -10,7 +10,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from post_training.critic import PixelIQL
+from post_training.iql.critic import PixelIQL
 from post_training.diagnostics import evaluate_critic
 from test_training import configuration, runner_dataset
 
@@ -125,7 +125,7 @@ def test_eval_uses_raw_inputs_no_grad_no_gpu_and_no_optimizer_or_target_updates(
     monkeypatch.setattr(torch.cuda, "get_rng_state", forbidden)
     monkeypatch.setattr(torch.cuda, "set_rng_state", forbidden)
     monkeypatch.setattr(torch.distributed, "all_reduce", forbidden)
-    monkeypatch.setattr("post_training.critic.augment_batch", forbidden)
+    monkeypatch.setattr("post_training.iql.critic.augment_batch", forbidden)
     evaluate_critic(model, [batch])
     assert all(torch.equal(before[k], value) for k, value in model.state_dict().items())
     assert modes == {name: item.training for name, item in model.named_modules()}

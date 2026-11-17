@@ -14,7 +14,7 @@ import torch
 import yaml
 
 from post_training.config import DEFAULTS, validate_config
-from post_training.critic import load_critic
+from post_training.iql.critic import load_critic
 from post_training.data import package_dataset
 from post_training.distributed import OptimizerGroup
 from post_training.export import validate_policy_package
@@ -319,7 +319,7 @@ def test_dry_run_critic_init_checks_metadata_without_constructing_network(
     export = Path(config["output_dir"]) / "critic_last.pt"
     config["critic"]["init_checkpoint"] = str(export)
     config["data"]["normalization"] = str(Path(config["output_dir"]) / "normalization.json")
-    import post_training.critic as critic_module
+    import post_training.iql.critic as critic_module
     def forbidden(*args, **kwargs):
         raise AssertionError("Dry run must not construct a critic")
     monkeypatch.setattr(critic_module, "PixelIQL", forbidden)
