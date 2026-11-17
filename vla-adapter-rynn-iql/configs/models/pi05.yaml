@@ -48,3 +48,16 @@ variants:
       image_flip_horizontal: false
     inference:
       open_loop_steps: 10
+  pi05-base:
+    # openpi generalist pretrained base (no LIBERO / LIBERO-X fine-tuning). Weights converted with the
+    # same pi05_libero architecture; uses LIBERO-X normalization stats so action scaling matches.
+    label: π₀.₅ · 通用预训练底座
+    source: gs://openpi-assets/checkpoints/pi05_base
+    revision: null
+    checkpoint: ../../../models/pi05_base_torch
+    stats_key: meituan/LIBERO-X
+    observation:
+      image_flip_vertical: true
+      image_flip_horizontal: false
+    inference:
+      open_loop_steps: 10
