@@ -1,5 +1,46 @@
 # pi0.5 post-training and official IDQL twin-Q
 
+## 代码导读（BC 与 IDQL）
+
+Scene24 L1 实验（BC78 / BC v2 75 分，IDQL 73 / 76 分）用的就是这个文件夹里的代码。`src/post_training/` 下的路径简写为 `pt/`。
+
+### BC：π₀.₅ 行为克隆（多卡）
+
+| 步骤 | 文件 · 函数 |
+|---|---|
+| 入口 | `train.py --method bc` |
+| 读配置 | `pt/config.py` |
+| 数据：按根轨迹划分训练/验证集，把轨迹切成 8 步动作块 | `pt/data.py`（`build_semi_mdp_chunks`、`replay_chunks`） |
+| 缓存：图像、状态和动作的归一化，mmap 读取 | `pt/replay.py`（`build_replay_cache`、`fit_normalization`、`CachedReplayDataset`） |
+| 模型与损失：π₀.₅（OpenPI）前向，flow matching 损失只算真实执行的步 | `pt/policy.py`（`Pi05Policy.forward`、`masked_flow_losses`） |
+| 训练循环：一步优化、验证集损失 | `pt/training.py`（`_train`、`optimization_step`、`evaluate_actor`） |
+| 多卡：DDP、全局采样、ZeRO-1 | `pt/distributed.py` |
+| 存档和导出成平台模型包 | `pt/checkpoint.py`、`pt/export.py` |
+| 官方示教（只有观测和动作）加入 BC | `pt/official_bc.py` |
+
+### IDQL 训练：只训 Q/V，BC 冻结不训
+
+| 步骤 | 文件 · 函数 |
+|---|---|
+| 入口（单进程，JAX pmap 多卡） | `train_idql_official.py` |
+| 训练主流程：准备数据、循环、验证、存档 | `pt/official_idql/runner.py`（`prepare`、`train`、`create_state`） |
+| 输入适配：两路相机 128px 加机器人状态；8 步动作块拼成一个动作 | `pt/official_idql/adapters.py` |
+| Q/V 更新：先 V（expectile 0.8），再双 Q 和目标网络 | `pt/official_idql/core.py`（`update`，调用作者的 `update_v` / `update_q`） |
+| 作者原版 IDQL 代码（未修改，加载时校验） | `pt/_vendor/idql_official/`（`jaxrl5/agents/ddpm_iql/ddpm_iql_learner.py`） |
+| 验证集检查、选用哪一步的 Q | `pt/official_idql/diagnostics.py`、`pairs.py`、`selection.py` |
+| 导出打分器、给候选打分 | `pt/official_idql/scoring.py`（`export_scorer`、`FrozenScorer.score_chunks`） |
+
+### IDQL 推理：评测时 BC 出候选，Q 挑一个
+
+| 步骤 | 文件 · 函数 |
+|---|---|
+| BC 出 4 个候选（第 0 个就是 BC 原本的输出） | `idql_eval/runtime_core.py`（`generate_pool`） |
+| 用 min(Q1, Q2) 打分，执行分最高的那个 | `idql_eval/runtime_core.py`（`infer`） |
+| 接平台评测（不改平台代码） | `idql_eval/provider.py`、`idql_eval/run_idql_evaluation.py` |
+
+详细说明见 [idql_eval/README.md](idql_eval/README.md)。`pt/critic.py`、`pt/actor_init.py`、`pt/actor_bc.py` 和 `pt/continuation.py` 是 IQL 用的，BC 和 IDQL 都不经过。
+
+
 This branch contains training code, tests, generic configuration examples and
 usage documentation. The official IDQL entry point is `train_idql_official.py`.
 
