@@ -1,0 +1,27 @@
+schema_version: 1
+method: bc
+output_dir: outputs/bc50_reproduce
+cache_dir: cache
+model:
+  checkpoint: models/pi05_liberox_torch
+  backbone: frozen
+  dtype: bfloat16
+data:
+  include_post_success: false
+  image_flip_vertical: true
+  image_flip_horizontal: false
+  validation_fraction: 0.0
+training:
+  global_batch_size: 16
+  per_device_batch_size: 2
+  gradient_accumulation_steps: auto
+  optimizer_updates: 800
+  learning_rate: 0.00003
+  final_learning_rate: 0.000003
+  warmup_updates: 80
+  seed: 7
+  checkpoint_interval: 100
+  log_interval: 10
+  sampling: replacement
+distributed:
+  workers_per_rank: 2

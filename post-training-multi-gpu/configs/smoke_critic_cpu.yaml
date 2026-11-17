@@ -1,0 +1,23 @@
+# Framework validation only; no pi0.5 weights or GPU required.
+schema_version: 1
+method: critic
+output_dir: outputs/smoke_critic_cpu
+data:
+  validation_fraction: 0.2
+training:
+  global_batch_size: 8
+  per_device_batch_size: 1
+  gradient_accumulation_steps: auto
+  optimizer_updates: 3
+  warmup_updates: 0
+  checkpoint_interval: 1
+  validation_interval: 1
+  log_interval: 1
+  tensorboard: true
+critic:
+  image_size: 32
+distributed:
+  device: cpu
+  backend: gloo
+  workers_per_rank: 2
+  pin_memory: false

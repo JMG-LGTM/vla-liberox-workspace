@@ -1,0 +1,17 @@
+schema_version: 1
+method: bc
+output_dir: outputs/bc_full
+model:
+  checkpoint: models/pi05_liberox_torch
+  backbone: full
+data:
+  validation_fraction: 0.0
+training:
+  global_batch_size: 64
+  per_device_batch_size: 2
+  gradient_accumulation_steps: auto
+  optimizer_updates: 5000
+  warmup_updates: 500
+  checkpoint_interval: 500
+  checkpoint_format: sharded
+  zero_optimizer: true

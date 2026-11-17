@@ -1,0 +1,42 @@
+# From-scratch fallback; prefer critic.yaml -> iql_from_critic.yaml first.
+# Frozen IQL with the BC50 actor budget: 800 updates * 16 samples.
+# An additional 12,500 critic-only updates precede the actor updates.
+# All selected data is used; critic metrics are training diagnostics without a
+# held-out quality guarantee. For a paired BC50 comparison pass data/bc50 and
+# use the same verified policy assets; data/scene23_61 adds 11 failure recordings.
+schema_version: 1
+method: iql
+output_dir: outputs/iql_frozen
+cache_dir: cache
+model:
+  checkpoint: models/pi05_liberox_torch
+  backbone: frozen
+  dtype: bfloat16
+data:
+  validation_fraction: 0.0
+  seed: 7
+training:
+  global_batch_size: 16
+  per_device_batch_size: 2
+  gradient_accumulation_steps: auto
+  optimizer_updates: 800
+  warmup_updates: 80
+  learning_rate: 0.00003
+  final_learning_rate: 0.000003
+  seed: 7
+  checkpoint_interval: 100
+  validation_interval: 500
+  log_interval: 10
+  sampling: replacement
+critic:
+  optimizer: adamw
+  weight_decay: 0.01
+  warmup_updates: 12500
+  init_checkpoint: null
+  image_size: 128
+  random_shift_pad: 4
+  expectile: 0.8
+  beta: 3.0
+  max_weight: 20.0
+distributed:
+  workers_per_rank: 2
