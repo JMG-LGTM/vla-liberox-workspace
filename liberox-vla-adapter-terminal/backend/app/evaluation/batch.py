@@ -261,7 +261,10 @@ def build_evaluation_preview(
 class ConsecutiveSuccess:
     """Latch success after the configured number of consecutive done values."""
 
-    def __init__(self, required: int = 5):
+    def __init__(self, required: int | None = None):
+        if required is None:  # Default: the system rule (success_consecutive_steps).
+            from ..policies.registry import model_module
+            required = model_module("config").success_consecutive_steps()
         self.required = _strict_int(required, "success_streak", 1)
         self.current = 0
         self.maximum = 0
@@ -462,7 +465,13 @@ def load_effective_config(path: Path) -> dict[str, Any]:
     task = _validate_exact_mapping(root["task_snapshot"], task_keys, "task_snapshot")
     from ..policies.snapshots import validate_snapshot
     policy = validate_snapshot(root["policy_snapshot"])
-    config = _validate_exact_mapping(root["config"], CONFIG_KEYS, "config")
+    # Configs frozen by an older local build may carry the removed controller
+    # option ``manipulability_enabled``. Off: load unchanged. On: refuse, since
+    # that controller no longer exists and the run cannot be reproduced.
+    legacy = {"manipulability_enabled"} & set(root["config"] if isinstance(root["config"], dict) else ())
+    config = _validate_exact_mapping(root["config"], CONFIG_KEYS | legacy, "config")
+    if config.get("manipulability_enabled", False) is not False:
+        raise ValueError("config.manipulability_enabled was removed; only false is accepted")
     _strict_string(task["task_id"], "task_snapshot.task_id")
     _strict_string(task["level"], "task_snapshot.level")
     _strict_string(task["task_name"], "task_snapshot.task_name")
@@ -510,9 +519,13 @@ def load_effective_config(path: Path) -> dict[str, Any]:
     )
     if config["control_hz"] != 20:
         raise ValueError("config.control_hz must remain 20 Hz")
+    # New evaluations use the system rule (success_consecutive_steps, 1 since
+    # 2026-11-18). Evaluations frozen earlier with the former five-step rule stay
+    # loadable and resumable with the value they were created with.
     required = model_module("config").success_consecutive_steps()
-    if config["success_streak"] != required:
-        raise ValueError(f"config.success_streak must remain {required} (system success_consecutive_steps)")
+    if config["success_streak"] not in {required, 5}:
+        raise ValueError(f"config.success_streak must be {required} (system success_consecutive_steps) "
+                         "or 5 (legacy frozen evaluations)")
     if config["consecutive_error_limit"] != 3:
         raise ValueError("config.consecutive_error_limit must remain 3")
     seed_count = config["seed_count"]

@@ -234,6 +234,22 @@ def test_effective_yaml_is_strict_and_schedule_is_frozen(tmp_path: Path, base_id
     path = tmp_path / "effective.yaml"
     path.write_text(yaml.safe_dump(payload), encoding="utf-8")
     assert load_effective_config(path)["evaluation_id"] == "eval-1"
+    # Frozen legacy five-step configs (above) and the current one-step rule load;
+    # any other streak does not.
+    for streak, ok in ((1, True), (3, False)):
+        path.write_text(yaml.safe_dump({**payload, "config": {**payload["config"], "success_streak": streak}}), encoding="utf-8")
+        if ok:
+            assert load_effective_config(path)["config"]["success_streak"] == 1
+        else:
+            with pytest.raises(ValueError, match="success_streak"):
+                load_effective_config(path)
+    # The removed controller option is accepted only as a legacy "off" value.
+    path.write_text(yaml.safe_dump({**payload, "config": {**payload["config"], "manipulability_enabled": False}}), encoding="utf-8")
+    assert load_effective_config(path)["config"]["manipulability_enabled"] is False
+    path.write_text(yaml.safe_dump({**payload, "config": {**payload["config"], "manipulability_enabled": True}}), encoding="utf-8")
+    with pytest.raises(ValueError, match="manipulability_enabled was removed"):
+        load_effective_config(path)
+    path.write_text(yaml.safe_dump(payload), encoding="utf-8")
     maximum = payload["config"]["open_loop_steps"]
     payload["config"]["open_loop_steps"] = maximum + 1
     path.write_text(yaml.safe_dump(payload), encoding="utf-8")

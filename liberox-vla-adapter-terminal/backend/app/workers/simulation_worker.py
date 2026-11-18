@@ -416,6 +416,7 @@ class SimulationManager:
                     self.eval_config.disabled_policy_cameras
                 ),
                 "control_hz": self.eval_config.control_hz,
+                "stop_after_success": False,
                 "video_fps": self.eval_config.video_fps,
                 "success_consecutive_steps": success_confirm_steps(),
                 "preview": {
@@ -608,6 +609,7 @@ class SimulationManager:
         seed: int | None = None,
         init_state_index: int = 0,
         disabled_policy_cameras: list[str] | tuple[str, ...] | None = None,
+        stop_after_success: bool = False,
         policy_id: str = "base",
         task_id: str | None = None,
         expected_policy_content_sha256: str | None = None,
@@ -634,6 +636,7 @@ class SimulationManager:
             disabled_policy_cameras = parent.get(
                 "disabled_policy_cameras", default_disabled_cameras
             )
+            stop_after_success = bool(parent.get("stop_after_success", False))
         seed = default_seed if seed is None else int(seed)
         disabled_policy_cameras = tuple(
             default_disabled_cameras
@@ -689,6 +692,7 @@ class SimulationManager:
             seed=seed,
             init_state_index=init_state_index,
             disabled_policy_cameras=disabled_policy_cameras,
+            stop_after_success=stop_after_success,
             policy_id=policy.policy_id,
             policy_label=policy.label,
             policy_family=getattr(policy, "family", None),
@@ -891,6 +895,7 @@ class SimulationManager:
         seed: int | None = None,
         init_state_index: int = 0,
         disabled_policy_cameras: list[str] | tuple[str, ...] | None = None,
+        stop_after_success: bool = False,
     ) -> dict[str, Any]:
         record = self._new_record(
             kind="original",
@@ -902,6 +907,7 @@ class SimulationManager:
             seed=seed,
             init_state_index=init_state_index,
             disabled_policy_cameras=disabled_policy_cameras,
+            stop_after_success=stop_after_success,
         )
         if initial_jpeg is not None:
             record.latest_jpeg = initial_jpeg
@@ -952,6 +958,7 @@ class SimulationManager:
         seed: int | None = None,
         init_state_index: int = 0,
         disabled_policy_cameras: list[str] | tuple[str, ...] | None = None,
+        stop_after_success: bool = False,
     ) -> dict[str, Any]:
         gpu_guard = getattr(self, "gpu_guard", None)
         if gpu_guard is not None and getattr(self, "work_queue", None) is None:
@@ -979,6 +986,7 @@ class SimulationManager:
                 seed=seed,
                 init_state_index=init_state_index,
                 disabled_policy_cameras=disabled_policy_cameras,
+                stop_after_success=stop_after_success,
                 policy_id=policy.policy_id,
                 policy_label=policy.label,
                 policy_content_sha256=getattr(policy, "content_sha256", None),
@@ -998,6 +1006,7 @@ class SimulationManager:
         seed: int | None = None,
         init_state_index: int | None = None,
         disabled_policy_cameras: list[str] | tuple[str, ...] | None = None,
+        stop_after_success: bool | None = None,
     ) -> dict[str, Any]:
         with self.lock:
             if self.active_session_id is not None:
@@ -1043,6 +1052,8 @@ class SimulationManager:
             draft.seed = next_seed
             draft.init_state_index = next_init_state_index
             draft.disabled_policy_cameras = next_disabled_cameras
+            if stop_after_success is not None:
+                draft.stop_after_success = stop_after_success
             policy_changed = draft.policy_id != policy.policy_id
             draft.policy_id = policy.policy_id
             draft.policy_label = policy.label
@@ -1096,6 +1107,7 @@ class SimulationManager:
                 seed=draft.seed,
                 init_state_index=draft.init_state_index,
                 disabled_policy_cameras=draft.disabled_policy_cameras,
+                **({"stop_after_success": True} if draft.stop_after_success else {}),
             )
         except Exception:
             with self.lock:
@@ -1139,6 +1151,9 @@ class SimulationManager:
                     parent.get("disabled_policy_cameras", ()),
                 )
             )
+            parent["stop_after_success"] = bool(source_metadata.get(
+                "stop_after_success", parent.get("stop_after_success", False)
+            ))
         if control_mode not in {"policy", "manual"}:
             raise ValueError("control_mode must be 'policy' or 'manual'")
         if control_mode == "policy":
@@ -1369,6 +1384,7 @@ class SimulationManager:
                     "max_steps": record.max_steps,
                     "open_loop_steps": record.open_loop_steps,
                     "control_hz": getattr(eval_config, "control_hz", 20),
+                    "stop_after_success": record.stop_after_success,
                     "seed": record.seed,
                     "disabled_policy_cameras": list(
                         record.disabled_policy_cameras
@@ -1427,6 +1443,7 @@ class SimulationManager:
                 "current_step": record.current_step,
                 "max_steps": record.max_steps,
                 "open_loop_steps": record.open_loop_steps,
+                "stop_after_success": record.stop_after_success,
                 "seed": record.seed,
                 "init_state_index": record.init_state_index,
                 "disabled_policy_cameras": list(record.disabled_policy_cameras),
@@ -1555,6 +1572,7 @@ class SimulationManager:
             "disabled_policy_cameras": list(
                 manifest.get("disabled_policy_cameras", []) or []
             ),
+            "stop_after_success": bool(manifest.get("stop_after_success", False)),
             "current_step": int(manifest.get("current_step", action_count) or 0),
             "state_count": state_count,
             "action_count": action_count,
@@ -1969,6 +1987,7 @@ class SimulationManager:
                 stop_requested=record.stop_event.is_set,
                 on_transition=on_transition,
                 stop_on_success=False,
+                stop_after_success=record.stop_after_success,
                 horizon_reason="max_steps",
             )
             if follower is not None:
@@ -2232,6 +2251,7 @@ class SimulationManager:
             "disabled_policy_cameras": list(record.disabled_policy_cameras),
             "open_loop_steps": record.open_loop_steps,
             "control_hz": self.eval_config.control_hz,
+            "stop_after_success": record.stop_after_success,
             "realtime_control": True,
             "policy_queries": record.policy_queries,
             "success": record.success,
@@ -2270,6 +2290,7 @@ class SimulationManager:
                 "overlay": record.policy_overlay,
                 "compatibility_sha256": record.policy_compatibility_sha256,
             },
+            "stop_after_success": record.stop_after_success,
             "task": record.task_prompt,
             "result": {
                 "success": record.success,

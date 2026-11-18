@@ -10,6 +10,7 @@ type Props = {
   tasks: TaskInfo[]; policies: PolicyInfo[]; active: boolean; busy: boolean;
   taskId: string; policyId: string; maxSteps: number; openLoop: number;
   seed: number; initStateIndex: number; disabledPolicyCameras: PolicyCameraId[];
+  stopAfterSuccess?: boolean; onStopAfterSuccess?: (value: boolean) => void;
   onCreate: () => void; onStart: () => void; onCancel: () => void; onStop: () => void;
   onTask: (value: string) => void; onMaxSteps: (value: number, commit: boolean) => void;
   onPolicy: (value: string) => void;
@@ -93,6 +94,15 @@ export function RunConfigForm(props: Props) {
           </label>;
         })}
         <p>关闭后仅将该 VLA 输入槽替换为黑帧；预览和录像仍保存原图，且至少保留一个输入。</p>
+      </fieldset>
+      <fieldset className="policy-camera-fieldset" disabled={props.active || props.busy}>
+        <legend>运行选项</legend>
+        <label className="policy-camera-option">
+          <input type="checkbox" checked={props.stopAfterSuccess ?? false} disabled={props.active || props.busy}
+            onChange={(event) => props.onStopAfterSuccess?.(event.target.checked)} />
+          <span>成功后 2 秒自动停止</span>
+        </label>
+        <p>首次成功后再执行 2 秒仿真时间（20 Hz 为 40 步）再保存；二次推理和人工续跑继承源会话的设置。</p>
       </fieldset>
       <div className="button-row">
         <Button className="primary" disabled={!canStartDraft(props.draft.preview_status !== "ERROR", props.active, props.busy)} onClick={props.onStart}>开始仿真</Button>

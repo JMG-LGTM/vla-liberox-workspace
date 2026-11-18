@@ -1,0 +1,13 @@
+schema_version: 1
+family_id: book_and_mug_into_right_caddy
+label: place the black book into the right desk caddy's left compartment and the red mug into its right compartment
+variants:
+  level1:
+    # LIBERO-X built-in two-step task (STUDY SCENE14).
+    task_id: LEVEL1::EXTENSION_STUDY_SCENE14_black_book_right_caddy_left_and_red_mug_right_caddy_right
+    level: LEVEL1
+    task_name: EXTENSION_STUDY_SCENE14_black_book_right_caddy_left_and_red_mug_right_caddy_right
+    goal_prompt: place the black book into the right desk caddy's left compartment and place the red mug into the right desk caddy's right compartment
+    bddl: ../../third_party/LIBERO-X/libero/libero_x/bddl/LEVEL1/EXTENSION_STUDY_SCENE14_black_book_right_caddy_left_and_red_mug_right_caddy_right.bddl
+    init: ../../third_party/LIBERO-X/libero/libero_x/init/LEVEL1/EXTENSION_STUDY_SCENE14_black_book_right_caddy_left_and_red_mug_right_caddy_right.init
+    optional: false

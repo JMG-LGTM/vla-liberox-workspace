@@ -104,3 +104,31 @@ describe("original simulation configuration", () => {
     expect(onPolicyCamera).toHaveBeenCalledWith("robot0_eye_in_hand", false);
   });
 });
+
+describe("draft run options", () => {
+  it("shows stop-after-success off by default and reports the toggle", () => {
+    const onStopAfterSuccess = vi.fn();
+    const draft = {
+      id: "draft", task_id: "task", max_steps: 300, open_loop_steps: 8, seed: 0, init_state_index: 0,
+      disabled_policy_cameras: [], policy_id: "base", policy_label: "Base", preview_status: "READY",
+      preview_revision: 1, preview_ready: true, preview_available: true, error: null,
+      task: { init_state_index_min: 0, init_state_index_max: 9 },
+    } as unknown as Parameters<typeof RunConfigForm>[0]["draft"];
+    const props = {
+      draft, branchDraft: null, tasks: [], policies: [], active: false, busy: false, taskId: "task",
+      policyId: "base", maxSteps: 300, openLoop: 8, seed: 0, initStateIndex: 0, disabledPolicyCameras: [],
+      onCreate: vi.fn(), onStart: vi.fn(), onCancel: vi.fn(), onStop: vi.fn(), onTask: vi.fn(), onPolicy: vi.fn(),
+      onMaxSteps: vi.fn(), onOpenLoop: vi.fn(), onSeed: vi.fn(), onInitStateIndex: vi.fn(), onPolicyCamera: vi.fn(),
+      onBranchOpenLoop: vi.fn(), onStartBranch: vi.fn(), onCancelBranch: vi.fn(), onStopAfterSuccess,
+    };
+    const { rerender } = render(<RunConfigForm {...props} />);
+    const box = screen.getByLabelText("成功后 2 秒自动停止") as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    fireEvent.click(box);
+    expect(onStopAfterSuccess).toHaveBeenCalledWith(true);
+    rerender(<RunConfigForm {...props} stopAfterSuccess active />);
+    const locked = screen.getByLabelText("成功后 2 秒自动停止") as HTMLInputElement;
+    expect(locked.checked).toBe(true);
+    expect(locked.disabled).toBe(true);
+  });
+});

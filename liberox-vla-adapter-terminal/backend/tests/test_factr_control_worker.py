@@ -93,6 +93,65 @@ def test_snapshot_stale_and_stop_prevent_physics(tmp_path):
     assert run_factr_loop(**call).stopped_reason == "user_stop"
 
 
+@pytest.mark.parametrize("enabled,target,stop_at,new_success,steps,reason", [
+    (False, 10, None, True, 8, "max_steps"),
+    (True, 10, None, True, 5, "success_after_delay"),
+    (True, 7, None, True, 5, "max_steps"),
+    (True, 10, 5, True, 3, "user_stop"),
+    (True, 10, 7, True, 5, "user_stop"),
+    (True, 10, None, False, 8, "max_steps"),
+])
+def test_factr_delayed_success_preserves_prefix_and_stop_precedence(
+    tmp_path, enabled, target, stop_at, new_success, steps, reason,
+):
+    from types import SimpleNamespace
+    class Env:
+        step_index = 0
+        def get_sim_state(self): return np.array([self.step_index], dtype=float)
+        def obs(self):
+            return {"robot0_eef_pos": np.zeros(3), "robot0_eef_quat": np.array([0., 0., 0., 1.]),
+                    "robot0_gripper_qpos": np.zeros(2)}
+    env = Env()
+    parent = TrajectoryRecorder(control_hz=2., capture_images=False)
+    parent.record_initial(env, env.obs())
+    for index in range(2):
+        env.step_index += 1
+        parent.record_transition(env, env.obs(), np.zeros(7), np.zeros(7), 0., index == 0, "policy")
+    recorder = TrajectoryRecorder.from_prefix(parent.arrays(), 2, 2.)
+    class Follower:
+        encoder = SimpleNamespace(encode=lambda *args: (np.zeros(7), np.zeros(7)))
+        def pose(self): return np.zeros(3), np.eye(3)
+        def step(self, *_):
+            env.step_index += 1
+            return env.obs(), 0., new_success and env.step_index == 3, {}
+    follower = Follower()
+    follower.env = env
+    record = SimulationSession(id="s", kind="branch", output_dir=tmp_path, max_steps=target,
+        open_loop_steps=8, resume_step=2, stop_after_success=enabled)
+    snapshot = FactrSnapshot(connected=True, stale=False, captured_monotonic=1., sample_monotonic=1.,
+                             joint_positions=(0.,) * 7, gripper_command=1.)
+    def transition(*_):
+        if stop_at is not None and recorder.action_count >= stop_at:
+            record.stop_event.set()
+    result = run_factr_loop(record=record, controller=SimpleNamespace(snapshot=lambda _: snapshot),
+        follower=follower, recorder=recorder, initial_observation=env.obs(),
+        rate_limiter=SimpleNamespace(wait_before_step=lambda: None), on_transition=transition)
+    assert result.success  # Historical true is preserved even when the last prefix flag was false.
+    assert result.executed_steps == steps and result.stopped_reason == reason
+    np.testing.assert_array_equal(recorder.arrays()["env_action"][:2], parent.arrays()["env_action"])
+
+
+@pytest.mark.parametrize("control_hz", [0., -1., float("nan"), float("inf")])
+def test_factr_delayed_stop_validates_control_frequency(tmp_path, control_hz):
+    record = SimulationSession(id="s", kind="branch", output_dir=tmp_path, max_steps=100,
+                               open_loop_steps=8, stop_after_success=True)
+    with pytest.raises(ValueError, match="finite positive control_hz"):
+        run_factr_loop(record=record, controller=None, follower=None,
+            recorder=TrajectoryRecorder(control_hz=control_hz, capture_images=False),
+            initial_observation={}, rate_limiter=None, on_transition=None)
+
+
+@pytest.mark.usefixtures("five_step_success_rule")
 @pytest.mark.parametrize("failure", [None, "prepare", "step", "postprocess", "cancel"])
 def test_shared_session_publishes_factr_like_other_manual_runs(tmp_path, monkeypatch, failure):
     import eval_pickplace_direct as direct

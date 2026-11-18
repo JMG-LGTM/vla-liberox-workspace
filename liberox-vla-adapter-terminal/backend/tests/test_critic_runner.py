@@ -201,7 +201,8 @@ def test_rollout_prepares_private_reward_free_probe_and_unloads_selected_model(w
     assert episode["inference_query_steps"] == [0, 4, 8]
     assert episode["recorded_action_count"] == 11
     assert episode["observation_orientation"] == "libero_raw"
-    assert [(c["start"], c["end"]) for c in episode["chunks"]] == [(0, 4), (4, 5), (5, 8), (8, 11)]
+    # The fake run is done on steps 0-4; with the one-step system rule success is confirmed at step 0.
+    assert [(c["start"], c["end"]) for c in episode["chunks"]] == [(0, 1), (1, 4), (4, 8), (8, 11)]
     with np.load(episode["observations_path"], allow_pickle=False) as arrays:
         assert arrays["agentview_image"].shape == (12, 2, 2, 3)
         for step, image in enumerate(arrays["agentview_image"]):

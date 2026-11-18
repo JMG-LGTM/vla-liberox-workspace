@@ -205,10 +205,11 @@ def test_manual_stop_during_wait_does_not_execute_an_extra_action():
 
 
 def test_confirmed_success_requires_consecutive_done_values():
-    assert success_confirm_steps() == 5  # vla-adapter-rynn-iql/configs/runtime.yaml
-    assert confirmed_success_step([False, True, False, True, True, True, True]) is None
-    assert confirmed_success_step([True] * 4 + [False] + [True] * 5) == 9
-    assert confirmed_success_step(np.ones(5, dtype=bool)) == 4
+    assert success_confirm_steps() == 1  # vla-adapter-rynn-iql/configs/runtime.yaml
+    assert confirmed_success_step([False, False, True, False]) == 2
+    assert confirmed_success_step([False, True, False, True, True, True, True], required=5) is None
+    assert confirmed_success_step([True] * 4 + [False] + [True] * 5, required=5) == 9
+    assert confirmed_success_step(np.ones(5, dtype=bool), required=5) == 4
     assert confirmed_success_step([]) is None
     with pytest.raises(ValueError):
         confirmed_success_step([True], required=0)
@@ -220,3 +221,85 @@ def test_success_rule_follows_the_system_setting(monkeypatch):
     assert success_confirm_steps() == 3
     assert confirmed_success_step([False, True, True, True]) == 3
     assert confirmed_success_step([False, True, True, True], required=5) is None
+@pytest.mark.parametrize("control_hz,extra_steps", [(20., 40), (10., 20), (7.5, 15), (2.25, 5)])
+@pytest.mark.parametrize("control_mode", ["policy", "manual"])
+def test_delayed_success_uses_two_seconds_of_control_steps(control_hz, extra_steps, control_mode):
+    env = FakeEnv()
+    recorder = TrajectoryRecorder(control_hz=control_hz, capture_images=False)
+    recorder.record_initial(env, observation(0))
+    source = ({"manual_query": lambda _: np.zeros(7)} if control_mode == "manual" else {
+        "policy_query": lambda obs, _: (obs, np.zeros((8, 7))),
+        "policy_action_transform": lambda action: action, "open_loop_steps": 8,
+    })
+    result = run_control_loop(env=env, recorder=recorder, initial_observation=observation(0),
+        target_action_count=100, rate_limiter=FakeLimiter(), action_source=control_mode,
+        stop_after_success=True, **source)
+    assert result.executed_steps == recorder.action_count == 3 + extra_steps
+    assert result.stopped_reason == "success_after_delay"
+    assert result.success
+    assert recorder.dones.count(True) == 1  # Timer remains latched after done becomes false.
+    assert recorder.state_count == recorder.action_count + 1
+
+
+@pytest.mark.parametrize("enabled,immediate,steps,reason", [
+    (False, False, 100, "horizon"), (True, True, 3, "success"),
+])
+def test_delayed_success_disabled_and_existing_immediate_mode(enabled, immediate, steps, reason):
+    env = FakeEnv()
+    recorder = TrajectoryRecorder(control_hz=20, capture_images=False)
+    recorder.record_initial(env, observation(0))
+    result = run_control_loop(env=env, recorder=recorder, initial_observation=observation(0),
+        target_action_count=100, rate_limiter=FakeLimiter(), action_source="human",
+        manual_query=lambda _: np.zeros(7), stop_after_success=enabled, stop_on_success=immediate)
+    assert result.executed_steps == steps
+    assert result.stopped_reason == reason
+
+
+@pytest.mark.parametrize("target,stop_at,steps,reason", [
+    (10, None, 10, "max_steps"), (43, None, 43, "max_steps"),
+    (100, 10, 10, "user_stop"), (100, 43, 43, "user_stop"),
+])
+def test_delayed_success_honors_horizon_and_user_stop(target, stop_at, steps, reason):
+    env = FakeEnv()
+    recorder = TrajectoryRecorder(control_hz=20, capture_images=False)
+    recorder.record_initial(env, observation(0))
+    result = run_control_loop(env=env, recorder=recorder, initial_observation=observation(0),
+        target_action_count=target, rate_limiter=FakeLimiter(), action_source="human",
+        manual_query=lambda _: np.zeros(7), stop_after_success=True, horizon_reason="max_steps",
+        stop_requested=lambda: stop_at is not None and recorder.action_count >= stop_at)
+    assert result.executed_steps == steps
+    assert result.stopped_reason == reason
+
+
+@pytest.mark.parametrize("new_success,steps,reason", [(False, 95, "horizon"), (True, 41, "success_after_delay")])
+def test_delayed_success_starts_new_grace_period_after_restored_prefix(new_success, steps, reason):
+    class ResumedEnv(FakeEnv):
+        def step(self, action):
+            obs, reward, done, info = super().step(action)
+            return obs, reward, done or (new_success and self.step_index == 6), info
+
+    env = ResumedEnv()
+    parent = TrajectoryRecorder(control_hz=20, capture_images=False)
+    parent.record_initial(env, observation(0))
+    for _ in range(5):
+        obs, reward, done, _ = env.step([0.] * 7)
+        parent.record_transition(env, obs, np.zeros(7), np.zeros(7), reward, done, "policy")
+    recorder = TrajectoryRecorder.from_prefix(parent.arrays(), 5, 20.)
+    result = run_control_loop(env=env, recorder=recorder, initial_observation=observation(5),
+        target_action_count=100, rate_limiter=FakeLimiter(), action_source="human",
+        manual_query=lambda _: np.zeros(7), stop_after_success=True)
+    assert result.success and result.executed_steps == steps
+    assert result.stopped_reason == reason
+    np.testing.assert_array_equal(recorder.arrays()["env_action"][:5], parent.arrays()["env_action"])
+
+
+@pytest.mark.parametrize("control_hz", [0., -1., float("nan"), float("inf")])
+def test_delayed_success_rejects_invalid_control_frequency_before_step(control_hz):
+    env = FakeEnv()
+    recorder = TrajectoryRecorder(control_hz=control_hz, capture_images=False)
+    recorder.record_initial(env, observation(0))
+    with pytest.raises(ValueError, match="finite positive control_hz"):
+        run_control_loop(env=env, recorder=recorder, initial_observation=observation(0),
+            target_action_count=100, rate_limiter=FakeLimiter(), action_source="human",
+            manual_query=lambda _: np.zeros(7), stop_after_success=True)
+    assert recorder.action_count == env.step_index == 0

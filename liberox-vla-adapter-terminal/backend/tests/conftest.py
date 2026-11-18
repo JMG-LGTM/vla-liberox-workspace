@@ -13,3 +13,15 @@ for path in (PLATFORM_ROOT, PLATFORM_ROOT / "scripts"):
 @pytest.fixture(autouse=True)
 def _isolated_digest_cache(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("VLA_DIGEST_CACHE_ROOT", str(tmp_path_factory.mktemp("digests")))
+
+
+@pytest.fixture
+def five_step_success_rule(monkeypatch):
+    """Pin the system success rule to the former five-step value.
+
+    The platform default is one step (``configs/runtime.yaml``). Tests that
+    exercise multi-step confirmation semantics use this fixture so they keep
+    covering the streak logic independently of the configured default.
+    """
+    import vla_rynn_iql.config as config
+    monkeypatch.setattr(config, "success_consecutive_steps", lambda: 5)

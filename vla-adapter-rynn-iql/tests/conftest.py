@@ -85,3 +85,30 @@ def configured(tmp_path: Path):
 def isolated_model_digest_cache(tmp_path_factory, monkeypatch):
     """Model digests computed by tests must never reach models/.cache/digests."""
     monkeypatch.setenv("VLA_DIGEST_CACHE_ROOT", str(tmp_path_factory.mktemp("digests")))
+
+
+@pytest.fixture(autouse=True)
+def five_step_success_rule(monkeypatch, request):
+    """Run this suite under the former five-step success rule.
+
+    ``configs/runtime.yaml`` now confirms success on one ``done`` step. These
+    tests were written for, and keep covering, multi-step confirmation
+    (streaks, transient pulses, post-success tails), so they pin the inherited
+    runtime value to 5. Tests marked ``system_success_rule`` see the real file.
+    """
+    if request.node.get_closest_marker("system_success_rule"):
+        return
+    from vla_rynn_iql import config, config_sources
+    runtime = config.RUNTIME_CONFIG.resolve()
+    original = config_sources._source_layers
+
+    def pinned(path, stack=(), *, method=None):
+        layers = original(path, stack, method=method)
+        if Path(path).expanduser().resolve() == runtime:
+            last = dict(layers[-1])
+            last["data"] = {**last.get("data", {}), "success_consecutive_steps": 5}
+            layers = [*layers[:-1], last]
+        return layers
+
+    monkeypatch.setattr(config_sources, "_source_layers", pinned)
+    monkeypatch.setattr(config, "success_consecutive_steps", lambda: 5)

@@ -181,6 +181,7 @@ def scan_trajectories(roots: Iterable[Path]) -> list[dict[str, Any]]:
                 "checkpoint": metadata.get("checkpoint"),
                 "max_steps": int(metadata.get("target_total_steps", len(trajectory["env_action"]))),
                 "open_loop_steps": metadata.get("open_loop_steps"),
+                "stop_after_success": bool(metadata.get("stop_after_success", False)),
                 "current_step": len(trajectory["env_action"]),
                 "state_count": len(trajectory["sim_state"]),
                 "action_count": len(trajectory["env_action"]),

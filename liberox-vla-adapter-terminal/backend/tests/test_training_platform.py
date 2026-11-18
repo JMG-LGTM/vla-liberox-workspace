@@ -607,6 +607,7 @@ def test_training_accepts_legacy_reward_manifest_for_no_forward_migration(tmp_pa
     assert manifest["schema_version"] == 5
 
 
+@pytest.mark.usefixtures("five_step_success_rule")
 def test_dataset_outcome_requires_confirmed_success_and_excludes_camera_ablations(tmp_path: Path):
     runs = {name: make_run(tmp_path, name, success=True) for name in
             ("flicker", "confirmed", "legacy_confirmed", "legacy_flicker", "ablation")}
@@ -647,6 +648,7 @@ def test_training_rejects_frozen_datasets_that_contain_camera_ablations(tmp_path
     assert current.require_ready_for_training(ok["id"])["integrity_status"] == "HEALTHY"
 
 
+@pytest.mark.usefixtures("five_step_success_rule")
 def test_new_datasets_store_the_system_success_rule_and_old_ones_keep_theirs(tmp_path: Path, monkeypatch):
     import vla_rynn_iql.config as config
     from pydantic import ValidationError

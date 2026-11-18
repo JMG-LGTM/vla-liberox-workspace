@@ -16,7 +16,7 @@ trials: 30
 base_seed: 0
 seed_count: null
 schedule_seed: 0
-success_streak: 5
+success_streak: 1
 consecutive_error_limit: 3
 # null uses the selected variant's default, capped by the child's supervised horizon.
 open_loop_steps: null

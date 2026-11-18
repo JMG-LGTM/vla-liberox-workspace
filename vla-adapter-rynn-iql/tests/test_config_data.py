@@ -591,3 +591,11 @@ def test_policy_camera_ablation_runs_never_become_training_episodes(configured, 
                             metadata_json=np.asarray(json.dumps({"disabled_policy_cameras": ["wrist"]})))
     prepare_dataset(configured)
     assert [episode["run_id"] for episode in load_manifest(configured)["episodes"]] == ["root"]
+
+
+@pytest.mark.system_success_rule
+def test_system_success_rule_is_one_step():
+    from vla_rynn_iql.config import DEFAULT_TRAIN_CONFIG, success_consecutive_steps
+    success_consecutive_steps.cache_clear()
+    assert success_consecutive_steps() == 1
+    assert load_train_config(DEFAULT_TRAIN_CONFIG).section("data")["success_consecutive_steps"] == 1

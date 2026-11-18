@@ -76,7 +76,7 @@ SELECTOR = dict(candidate_count=4, mode='greedy', target_reduction='min', num_in
 # Scene24 L1 evaluation protocol, also hard-coded in provider.py, idql_worker.py and runtime_core.py.
 PROTOCOL = dict(max_steps=950, open_loop_steps=8, control_hz=20, realtime=True,
                 schedule_sha256s=sorted(CONFIG['schedule_sha256s']),
-                disabled_policy_cameras=[], manipulability_enabled=False)
+                disabled_policy_cameras=[])
 
 
 def canonical(value):

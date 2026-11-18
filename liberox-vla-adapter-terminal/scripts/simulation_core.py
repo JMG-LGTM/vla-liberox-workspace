@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import math
 import time
 from typing import Any, Callable, Sequence
 
@@ -77,6 +78,7 @@ def run_control_loop(
     stop_requested: StopPredicate | None = None,
     on_transition: TransitionCallback | None = None,
     stop_on_success: bool = False,
+    stop_after_success: bool = False,
     horizon_reason: str = "horizon",
 ) -> ControlLoopResult:
     """Advance an environment while preserving recorder and timing semantics.
@@ -84,6 +86,12 @@ def run_control_loop(
     Exactly one action source must be provided. A stop request is observed at
     safe control boundaries and again after a synchronous policy call returns,
     so CUDA execution is never interrupted.
+
+    ``stop_after_success`` permits two seconds of additional simulated control
+    after the first native success in this invocation. Historical prefix success
+    still contributes to the result, but does not start a resumed branch's timer.
+    An immediate ``stop_on_success`` retains its existing precedence. Horizon
+    and user stop remain the upper bounds on the additional recording.
     """
     if target_action_count < recorder.action_count:
         raise ValueError("target_action_count precedes the recorded trajectory prefix")
@@ -93,6 +101,12 @@ def run_control_loop(
         raise ValueError("Provide exactly one of policy_query or manual_query")
     if policy_query is not None and policy_action_transform is None:
         raise ValueError("Policy control requires policy_action_transform")
+    success_delay_steps = 0
+    if stop_after_success:
+        control_hz = float(recorder.control_hz)
+        if not math.isfinite(control_hz) or control_hz <= 0:
+            raise ValueError("stop_after_success requires finite positive control_hz")
+        success_delay_steps = math.ceil(2.0 * control_hz)
 
     observation = initial_observation
     queue: deque[np.ndarray] = deque()
@@ -101,10 +115,14 @@ def run_control_loop(
     success = any(recorder.dones)
     stopped_reason = horizon_reason
     start_action_count = recorder.action_count
+    success_stop_at: int | None = None
 
     while recorder.action_count < target_action_count:
         if stop_requested is not None and stop_requested():
             stopped_reason = "user_stop"
+            break
+        if success_stop_at is not None and recorder.action_count >= success_stop_at:
+            stopped_reason = "success_after_delay"
             break
 
         if policy_query is not None:
@@ -160,6 +178,8 @@ def run_control_loop(
             done,
             action_source=action_source,
         )
+        if done and stop_after_success and success_stop_at is None:
+            success_stop_at = recorder.action_count + success_delay_steps
         if on_transition is not None:
             on_transition(observation, recorder.action_count, success)
         if done and stop_on_success:
