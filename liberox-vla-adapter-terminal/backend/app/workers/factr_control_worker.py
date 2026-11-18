@@ -1,4 +1,5 @@
 """FACTR preparation and recorded control, using the shared session lifecycle."""
+import math
 import time
 
 from ..devices.factr_joint_control import align_for_takeover
@@ -22,13 +23,23 @@ def run_factr_loop(*, record, controller, follower, recorder, initial_observatio
                    rate_limiter, on_transition):
     from simulation_core import ControlLoopResult
     observation = initial_observation
-    success = bool(recorder.dones[-1]) if recorder.dones else False
+    success = any(recorder.dones)
+    success_stop_at = None
+    delay_steps = 0
+    if record.stop_after_success:
+        control_hz = float(recorder.control_hz)
+        if not math.isfinite(control_hz) or control_hz <= 0:
+            raise ValueError("stop_after_success requires finite positive control_hz")
+        delay_steps = math.ceil(2.0 * control_hz)
     start_count = recorder.action_count
     times = []
     reason = "max_steps"
     while recorder.action_count < record.max_steps:
         if record.stop_event.is_set():
             reason = "user_stop"
+            break
+        if success_stop_at is not None and recorder.action_count >= success_stop_at:
+            reason = "success_after_delay"
             break
         rate_limiter.wait_before_step()
         if record.stop_event.is_set():
@@ -49,5 +60,7 @@ def run_factr_loop(*, record, controller, follower, recorder, initial_observatio
         recorder.record_transition(follower.env, observation, raw, action, reward, done,
                                    action_source="human")
         success = success or bool(done)
+        if done and record.stop_after_success and success_stop_at is None:
+            success_stop_at = recorder.action_count + delay_steps
         on_transition(observation, recorder.action_count, success)
     return ControlLoopResult(success, recorder.action_count-start_count, 0, reason, times, observation)

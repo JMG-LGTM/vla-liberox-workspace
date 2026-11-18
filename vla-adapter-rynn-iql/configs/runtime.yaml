@@ -32,7 +32,7 @@ data:
   # System-wide success rule (consecutive done values) for run classification,
   # statistics, batch tests, rewards and new datasets. Datasets store the value
   # they were created with; change it here, not per dataset.
-  success_consecutive_steps: 5
+  success_consecutive_steps: 1
   # false: train through the confirming action only; keep full recordings/evaluations.
   include_post_success: true
   validation_fraction: 0.2

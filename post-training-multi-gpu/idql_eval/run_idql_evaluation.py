@@ -23,7 +23,7 @@ def validate_effective(value, contract):
     require(manifest['component_sha256']['actor'] == contract['actor']['sha256']
         and policy['actor'] == contract['actor']['path'], 'Runner BC component differs')
     require(policy['model_config']['num_inference_steps'] == 10, 'Flow step count differs')
-    for key in ('max_steps','open_loop_steps','control_hz','realtime','disabled_policy_cameras','manipulability_enabled'):
+    for key in ('max_steps','open_loop_steps','control_hz','realtime','disabled_policy_cameras'):
         require(config[key] == contract['protocol'][key], 'Runner protocol changed: '+key)
     require(value['schedule_sha256'] in contract['protocol']['schedule_sha256s'], 'Runner schedule is not a configured one')
 

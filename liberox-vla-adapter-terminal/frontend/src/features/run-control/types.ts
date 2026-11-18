@@ -92,6 +92,8 @@ export type Bootstrap = {
 export type Draft = {
   id: string; task_id: string; max_steps: number; open_loop_steps: number;
   seed: number; init_state_index: number; disabled_policy_cameras: PolicyCameraId[];
+  /** Record two more seconds of simulated control after the first success, then stop. */
+  stop_after_success?: boolean;
   policy_id: string; policy_label: string;
   preview_status: "PREPARING" | "RENDERING" | "READY" | "ERROR";
   preview_revision: number; preview_ready: boolean; preview_available: boolean;
@@ -130,6 +132,7 @@ export type Session = {
   controller_deadman_ms?: number | null;
   max_steps: number; open_loop_steps: number; current_step: number; state_count: number;
   seed: number; init_state_index: number; disabled_policy_cameras: PolicyCameraId[];
+  stop_after_success?: boolean;
   action_count: number; policy_queries: number; success: boolean; error: string | null;
   /** Confirmed by the system-wide success_consecutive_steps (shared with batch tests and training). */
   success_confirmed?: boolean; success_confirmed_step?: number | null;

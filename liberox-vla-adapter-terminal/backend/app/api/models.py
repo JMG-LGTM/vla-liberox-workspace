@@ -49,6 +49,7 @@ class DraftRequest(StrictModel):
     seed: int | None = Field(default=None, ge=0, le=2147483647)
     init_state_index: int = Field(default=0, ge=0)
     disabled_policy_cameras: list[PolicyCamera] = Field(default_factory=list)
+    stop_after_success: StrictBool = False
 
     @model_validator(mode="after")
     def validate_cameras(self):
@@ -64,6 +65,7 @@ class UpdateDraftRequest(StrictModel):
     seed: int | None = Field(default=None, ge=0, le=2147483647)
     init_state_index: int | None = Field(default=None, ge=0)
     disabled_policy_cameras: list[PolicyCamera] | None = None
+    stop_after_success: StrictBool | None = None
 
     @model_validator(mode="after")
     def require_update(self):
@@ -75,6 +77,7 @@ class UpdateDraftRequest(StrictModel):
             and self.seed is None
             and self.init_state_index is None
             and self.disabled_policy_cameras is None
+            and self.stop_after_success is None
         ):
             raise ValueError("At least one draft field must be provided")
         _validate_camera_selection(self.disabled_policy_cameras)

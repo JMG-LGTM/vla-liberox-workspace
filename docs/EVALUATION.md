@@ -10,7 +10,7 @@
 - `tasks`：每项包含 `level`、`task_name`、`max_steps`、`init_state_indices`。指令从对应 BDDL 读取。
 - `trials`、`base_seed`、`seed_count`、`schedule_seed`：生成与 main 相同的平衡测试安排；每个模型使用相同安排。
 - `open_loop_steps`：`null` 使用模型变体默认值，后训练模型还受监督长度约束；显式填写时检查预测长度上限。
-- `success_streak`：默认连续 5 步环境成功，确认后锁定成功，但继续执行完整回合。
+- `success_streak`：默认 1（单步环境成功即确认，和平台 `configs/runtime.yaml` 的 `success_consecutive_steps` 一致；填 5 复现旧的连续 5 步规则），确认后锁定成功，但继续执行完整回合。
 - `render_backend`：`egl` 或 `osmesa`。`check_environment` 仅决定 `--check-render` 使用的环境。
 - `output_root`：每次运行建立独立结果目录；配置中的相对路径均相对于 YAML 所在目录。
 

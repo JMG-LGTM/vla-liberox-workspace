@@ -33,6 +33,7 @@ class SimulationSession:
     seed: int = 0
     init_state_index: int = 0
     disabled_policy_cameras: tuple[str, ...] = ()
+    stop_after_success: bool = False
     policy_id: str = "base"
     policy_label: str | None = None
     policy_family: str | None = None
@@ -179,6 +180,7 @@ class SimulationSession:
             "seed": self.seed,
             "init_state_index": self.init_state_index,
             "disabled_policy_cameras": list(self.disabled_policy_cameras),
+            "stop_after_success": self.stop_after_success,
             "current_step": self.current_step,
             "state_count": self.state_count,
             "action_count": self.action_count,
@@ -218,6 +220,7 @@ class SimulationDraft:
     seed: int = 0
     init_state_index: int = 0
     disabled_policy_cameras: tuple[str, ...] = ()
+    stop_after_success: bool = False
     policy_id: str = "base"
     policy_label: str | None = None
     policy_content_sha256: str | None = None
@@ -235,6 +238,7 @@ class SimulationDraft:
             "seed": self.seed,
             "init_state_index": self.init_state_index,
             "disabled_policy_cameras": list(self.disabled_policy_cameras),
+            "stop_after_success": self.stop_after_success,
             "policy_id": self.policy_id,
             "policy_label": self.policy_label,
             "preview_status": self.preview_status,

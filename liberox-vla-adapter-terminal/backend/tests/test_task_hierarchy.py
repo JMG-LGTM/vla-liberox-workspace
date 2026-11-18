@@ -66,6 +66,7 @@ def test_default_catalog_covers_all_registered_families_and_levels_without_loadi
         "black_blue_bowls_in_tray": {"LEVEL2"},
         "green_black_bowls_onto_plates": {"LEVEL1"},
         "largest_medium_bowls_in_drainer": {"LEVEL1"},
+        "book_and_mug_into_right_caddy": {"LEVEL1"},
     }
     assert collection_levels.keys() <= set(families)
     for family_id, family in families.items():

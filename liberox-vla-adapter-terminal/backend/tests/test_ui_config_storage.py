@@ -295,6 +295,7 @@ def test_branch_source_is_physical_and_survives_parent_deletion(tmp_path: Path):
     assert all(Path(item["trajectory"]).name != "source_trajectory.npz" for item in indexed)
 
 
+@pytest.mark.usefixtures("five_step_success_rule")
 def test_ui_manifest_and_summary_are_compact(tmp_path: Path):
     manager = object.__new__(SimulationManager)
     manager.eval_config = SimpleNamespace(
@@ -444,6 +445,7 @@ def test_delete_rejects_legacy_and_symlink_directories(tmp_path: Path):
         manager.delete_session("linked", "linked")
 
 
+@pytest.mark.usefixtures("five_step_success_rule")
 @pytest.mark.parametrize("streak,expected", [(5, 14), (4, None)])
 def test_records_without_confirmed_fields_derive_them_from_done(tmp_path, streak, expected):
     done = np.zeros(20, dtype=bool)
@@ -470,6 +472,7 @@ def test_legacy_scan_keeps_the_policy_camera_ablation_marker(tmp_path):
 
 
 
+@pytest.mark.usefixtures("five_step_success_rule")
 def test_stored_confirmation_is_recomputed_after_the_system_rule_changes(tmp_path, monkeypatch):
     import vla_rynn_iql.config as config
     done = np.zeros(20, dtype=bool)
