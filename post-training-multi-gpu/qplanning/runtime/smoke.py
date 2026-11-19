@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""GPU smoke for a configured reference scorer and the current candidate-selection policy."""
+from __future__ import annotations
+import argparse
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+import numpy as np
+from .contract import atomic_json, gpu_lock, require, validate_contract
+from .reference_probe import check_limits, load_spec, offline_scores, run_reference, score_errors, validate_reference
+
+
+def backend_flags(torch):
+    return [torch.backends.cuda.flash_sdp_enabled(), torch.backends.cuda.mem_efficient_sdp_enabled(),
+            torch.backends.cuda.math_sdp_enabled(), torch.backends.cuda.matmul.allow_tf32,
+            torch.get_float32_matmul_precision()]
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser()
+    p.add_argument('--runtime-contract', type=Path, required=True)
+    p.add_argument('--output', type=Path, required=True)
+    p.add_argument('--observation', type=Path, required=True, help='Policy-oriented observation with the configured camera views')
+    p.add_argument('--train-frames', type=Path, help='Cached feature fixtures for greedy smoke')
+    p.add_argument('--q-fixture', type=Path, help='Optional raw candidate fixture for the current critic; defaults to configured reference inputs')
+    p.add_argument('--trial-seeds', type=int, nargs='+', required=True)
+    p.add_argument('--prompt', required=True)
+    a = p.parse_args(argv)
+    require(not a.output.exists(), 'preserve real probe attempts')
+    c = validate_contract(a.runtime_contract)
+    with gpu_lock(c):
+        return smoke_locked(a,c)
+
+
+def smoke_locked(a,c):
+    seed = (c['critic'] or {}).get('seed')
+    import torch
+    from .runtime_core import q_numerics
+    archived = None
+    if c['pick']=='greedy':
+        require(a.train_frames is not None,'greedy smoke requires cached feature fixtures')
+        spec=load_spec(c)
+        with q_numerics(), torch.random.fork_rng(devices=[0]):
+            archived=run_reference(spec,torch.device('cuda:0'))
+        validate_reference(archived,spec)
+
+    import sys
+    workspace = Path(c['workspace'])
+    terminal = workspace/'liberox-vla-adapter-terminal'
+    sys.path[:0] = [str(terminal),str(terminal/'scripts')]
+    from backend.app.policies.snapshots import catalog_from_snapshot
+    raw = c['snapshot']
+    entry = catalog_from_snapshot(raw,a.output.parent/'.empty-policy-registry').select(raw['policy_id'])
+    request = dict(runtime_contract=str(a.runtime_contract), policy_id=entry.policy_id, content_sha256=entry.content_sha256,
+                   base_revision=entry.base_revision,runtime_composite_sha256=c['composite_sha256'],model=entry.settings,
+                   actor=str(entry.actor) if entry.actor else None,actor_sha256=entry.component_sha256.get('actor'),parent=entry.parent)
+    from .worker import load_runtime
+    runtime, _ = load_runtime(request, device='cuda:0')
+    from openpi.policies.policy import Policy
+    require(runtime.device.type == 'cuda' and torch.cuda.is_initialized(), 'GPU inference required')
+    flags = backend_flags(torch)
+    scorer = runtime.scorer
+
+    parity=None
+    if c['pick']=='greedy':
+        with np.load(a.train_frames) as z:
+            frames = {k: z[k] for k in z.files}
+        view_fields=spec['view_fields']
+        feature_errors = []
+        for *views, cached in zip(*(frames[k] for k in view_fields),frames['features'],strict=True):
+            online=scorer.features(*views)[0].float().cpu().numpy()
+            feature_errors.append(float(np.abs(online-cached.astype(np.float32)).max()))
+        require(max(feature_errors)<=spec['feature_atol'],f'online feature error: {max(feature_errors)}')
+
+        fixture_path=a.q_fixture or spec['assets']['fixture']['path']
+        with np.load(fixture_path,allow_pickle=False) as z:
+            fixture={k:z[k] for k in (*view_fields,spec['candidate_field'])}
+        actions=fixture[spec['candidate_field']]
+        online=np.stack([scorer.score(scorer.features(*views),cand,runtime.config.horizon)
+                         for *views,cand in zip(*(fixture[k] for k in view_fields),actions,strict=True)])
+        with q_numerics():
+            offline=offline_scores(scorer.net,scorer.dino,fixture,spec,scorer.device,scorer.mean,scorer.std,runtime.config)
+        parity=score_errors(online,offline)
+        check_limits(parity,dict(spec,score_shape=list(actions.shape[:2])))
+        tail=actions[0]
+        horizon=runtime.config.horizon
+        if horizon>1:
+            masked_length=horizon-1
+            masked=tail.copy()
+            masked[:,masked_length:]=np.clip(masked[:,masked_length:]+.5,-1.,1.)
+            features=scorer.features(*(fixture[k][0] for k in view_fields))
+            require(np.array_equal(scorer.score(features,tail,masked_length),scorer.score(features,masked,masked_length)),
+                    'masked tail actions changed Q')
+        require(backend_flags(torch)==flags,'Q scoring changed process-wide attention flags')
+        parity.update(checkpoint_sha256=c['critic']['sha256'],training_feature_frames=len(feature_errors),
+                      feature_max_abs_error=max(feature_errors))
+
+    with np.load(a.observation, allow_pickle=False) as data:
+        observation = {k: data[k] for k in data.files}
+    observation['prompt'] = a.prompt
+    baseline = Policy(runtime.components.model, transforms=[runtime.components.input_transform],
+                      output_transforms=[runtime.components.output_transform], is_pytorch=True,
+                      pytorch_device='cuda:0', sample_kwargs={'num_steps': raw['model_config']['num_inference_steps']})
+    steps, horizon = runtime.config.max_steps, runtime.config.horizon
+    remaining = [steps-i*horizon for i in range(3) if steps>i*horizon]+[min(steps,max(1,horizon-1))]
+    diagnostics, checks = [], []
+    original_sample = runtime.components.model.sample_noise
+    for trial in a.trial_seeds:
+        baseline_noise = []
+
+        def capture_noise(shape, device):
+            noise = original_sample(shape, device)
+            baseline_noise.append(noise.detach().float().cpu().numpy().copy())
+            return noise
+        runtime.components.model.sample_noise = capture_noise
+        try:
+            with torch.random.fork_rng(devices=[runtime.device.index or 0]):
+                torch.manual_seed(trial)
+                torch.cuda.manual_seed_all(trial)
+                expected = [np.clip(np.asarray(baseline.infer(observation)['actions'], dtype=np.float32), -1., 1.) for _ in remaining]
+        finally:
+            runtime.components.model.sample_noise = original_sample
+        require(len(baseline_noise) == len(remaining), 'BC default stream not observed')
+        runtime.reset_seed(trial)
+        reference_rng = np.random.default_rng(np.random.SeedSequence([c['selection_seed'],trial]))
+        captured = []
+        original_pool = runtime.generate_pool
+
+        def capture_pool(obs):
+            actions, noise = original_pool(obs)
+            captured.append((actions.copy(), noise.copy()))
+            return actions, noise
+        runtime.generate_pool = capture_pool
+        try:
+            for query, length in enumerate(remaining):
+                selected, d = runtime.infer(observation, remaining_steps=length)
+                pool, noise = captured[-1]
+                index = d['selected_index']
+                require(np.array_equal(noise[0], baseline_noise[query][0]), 'anchor noise differs from the BC stream')
+                require(np.array_equal(pool[0], expected[query]), 'anchor actions differ from original BC')
+                count = c['candidate_count']
+                require(pool.shape == (count, *expected[query].shape) and len({n.tobytes() for n in noise}) == count, 'candidate pool differs')
+                slot_errors=[]
+                for slot in range(count):
+                    ref=baseline.infer(observation,noise=noise[slot:slot+1])['actions']
+                    ref=np.clip(np.asarray(ref,dtype=np.float32),-1.,1.)
+                    error=float(np.abs(pool[slot]-ref).max())
+                    require(np.array_equal(pool[slot],ref),f'BC candidate {slot} differs under the same noise: {error}')
+                    slot_errors.append(error)
+                expected_index=int(np.argmax(d['scores'])) if c['pick']=='greedy' else int(reference_rng.integers(count))
+                require(np.array_equal(selected, pool[index]) and index == expected_index, 'selection differs')
+                require(np.abs(pool).max() <= 1. and d['remaining_horizon_mask'] == min(horizon, length), 'clip or horizon differs')
+                diagnostics.append(d)
+                checks.append(dict(seed=trial, query=query, noise_exact=True, actions_exact=True, per_slot_max_abs=slot_errors))
+        finally:
+            runtime.generate_pool = original_pool
+    require(backend_flags(torch) == flags, 'attention flags changed during inference')
+    require(all(not q.requires_grad for q in runtime.components.model.parameters()), 'actor is trainable')
+    proof = dict(status='PASS_QPLANNING_GPU_SMOKE', observed_at=datetime.now(timezone.utc).isoformat(),
+                 critic_seed=seed, composite_sha256=c['composite_sha256'], attention_flags=flags,
+                 scorer_parity=parity, reference_gpu=archived, candidate_policy_id=c['candidate_policy_id'], pick=c['pick'],
+                 bc_checks=checks, simulator_rollout_executed=False,
+                 latency_ms=dict(total=float(np.median([d['total_ms'] for d in diagnostics])),
+                                 candidates=float(np.median([d['candidate_generation_ms'] for d in diagnostics])),
+                                 features=float(np.median([d['feature_ms'] for d in diagnostics])),
+                                 q=float(np.median([d['critic_selection_ms'] for d in diagnostics]))),
+                 peak_allocated_bytes=torch.cuda.max_memory_allocated(), peak_reserved_bytes=torch.cuda.max_memory_reserved())
+    atomic_json(a.output, proof)
+    print(json.dumps({k: v for k, v in proof.items() if k != 'bc_checks'}))
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,17 @@
+Q-Planning
+Copyright 2026 The Q-Planning authors
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use these files
+except in compliance with the License. You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+This project builds on LeRobot (https://github.com/huggingface/lerobot), Copyright The
+HuggingFace Inc. team, also licensed under the Apache License, Version 2.0. LeRobot is a
+dependency rather than a bundled component; its own NOTICE and third-party attributions
+ship with it.
+
+The benchmarks and the default policy are the work of their respective authors:
+  * LIBERO   — https://github.com/Lifelong-Robot-Learning/LIBERO
+  * RoboTwin — https://github.com/RoboTwin-Platform/RoboTwin
+  * FastWAM  — the policy this release uses by default
