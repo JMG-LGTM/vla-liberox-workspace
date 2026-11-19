@@ -1,6 +1,6 @@
 # Q-planning
 
-本模块从带终止标签的机器人轨迹训练动作块 Q，并在闭环中使用冻结策略生成候选。在仓库的 `post-training-multi-gpu` 目录运行 `python -m qplanning.<模块> --help` 查看参数。
+本模块从带终止标签的机器人轨迹训练动作块 Q，并在闭环中使用冻结策略生成候选。在仓库根目录运行 `python -m qplanning.<模块> --help` 查看参数。
 
 ## 配置与数据
 
