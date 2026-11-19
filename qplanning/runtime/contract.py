@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 
 from ..config import QConfig, load_config
+from .planning import MEAN_MODES, Q_MODES, validate_options
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_NOISE_NAMESPACE = 'qplanning-n4-v1'
@@ -76,7 +77,15 @@ def validate_smoke(proof, contract):
     require(proof['bc_checks'] and all(c['noise_exact'] and c['actions_exact']
             and c['per_slot_max_abs']==[0.0]*contract['candidate_count'] for c in proof['bc_checks']),
             'GPU smoke did not verify every candidate slot')
-    if contract['pick']=='greedy':
+    if contract['pick'] in MEAN_MODES:
+        require(all(c.get('normalized_exact') and c.get('raw_exact') and c.get('aggregation_exact') and
+                    c.get('candidates_compared')==c.get('matched_count')==contract['candidate_count'] and c.get('mismatched_indices')==[] and
+                    c.get('per_slot_normalized_max_abs')==[0.0]*contract['candidate_count'] and
+                    len(c['selected_indices'])==len(c['weights'])==contract['elite_count'] for c in proof['bc_checks']),
+                'missing normalized candidate, original BC or aggregation parity')
+        if contract['pick'] in Q_MODES:
+            require(all(c.get('offline_scores_exact') for c in proof['bc_checks']), 'missing current offline candidate score parity')
+    if contract['pick'] in Q_MODES:
         from .reference_probe import load_spec, validate_reference
         validate_reference(proof.get('reference_gpu',{}),load_spec(contract))
         require(proof.get('scorer_parity',{}).get('checkpoint_sha256')==contract['critic']['sha256'],
@@ -87,7 +96,7 @@ def code_files(workspace):
     terminal = workspace/'liberox-vla-adapter-terminal'
     project = workspace/'vla-adapter-rynn-iql'
     openpi = workspace/'third_party/OpenPI'
-    sources = [HERE/n for n in ('contract.py', 'q_model.py', 'runtime_core.py', 'worker.py', 'provider.py', 'run_eval.py', 'smoke.py', 'reference_probe.py')]
+    sources = [HERE/n for n in ('contract.py', 'q_model.py', 'runtime_core.py', 'planning.py', 'planning_smoke.py', 'worker.py', 'provider.py', 'run_eval.py', 'smoke.py', 'reference_probe.py')]
     sources += [HERE.parent/n for n in ('config.py','defaults.json','c_score.py','critic.py','features.py','metrics.py','data.py')]
     sources += [terminal/'backend/app/policies/pi05.py', terminal/'backend/app/evaluation/batch.py',
                 project/'scripts/pi05_worker.py', project/'src/vla_rynn_iql/pi05.py',
@@ -116,14 +125,17 @@ def validate_contract(path, *, verify_payloads=False):
     require(c['schema_version']==3 and c['composite_sha256']==canonical({k:v for k,v in c.items() if k!='composite_sha256'}),
             'runtime identity changed')
     require(c['candidate_policy_id']==c['continuation_policy_id']==c['snapshot']['policy_id'], 'actor identities differ')
-    require(type(c['candidate_count']) is int and c['candidate_count']>=1 and c['pick'] in ('greedy','random'),
+    require(type(c['candidate_count']) is int and c['candidate_count']>=1 and c['pick'] in ('greedy','random',*MEAN_MODES),
             'invalid selector')
+    steps=c.get('flow_steps', c['snapshot']['model_config']['num_inference_steps'])
+    validate_options(c['pick'], c['candidate_count'], c.get('elite_count'), c.get('temperature'), steps)
+    require((c['critic'] is not None)==(c['pick'] in Q_MODES), 'Q binding differs from selection mode')
     require(type(c['selection_seed']) is int and 0<=c['selection_seed']<1<<63, 'invalid selection seed')
     require(isinstance(c['noise_namespace'],str) and c['noise_namespace'].strip(), 'empty noise namespace')
     q_config=QConfig.from_dict(c['q_config'])
     require(q_config.max_steps==c['protocol']['max_steps'] and q_config.horizon==c['protocol']['open_loop_steps'],
             'sealed lengths differ')
-    if c['pick']=='greedy':
+    if c['pick'] in Q_MODES:
         smoke=c['smoke_config']
         require(sha(smoke['path'])==smoke['sha256'],'smoke configuration changed')
     sources=code_files(Path(c['workspace']))
@@ -144,7 +156,7 @@ def build_contract(args):
     workspace=args.workspace.resolve()
     require(args.noise_namespace.strip(), 'empty noise namespace')
     q_config=load_config(args.q_config)
-    if args.pick=='greedy':
+    if args.pick in Q_MODES:
         require(all(v is not None for v in (args.q_weights,args.q_seed,args.q_step,args.action_stats,args.dino,args.smoke_config)),
                 'greedy requires Q assets, training seed/step and smoke configuration')
         require(args.q_step > 0, 'Q checkpoint step must be positive')
@@ -157,12 +169,15 @@ def build_contract(args):
            continuation_policy_id=args.continuation_policy_id,pick=args.pick,candidate_count=args.candidate_count,
            selection_seed=args.selection_seed,noise_namespace=args.noise_namespace,q_config=q_config.to_dict(),
            protocol={k:configs[0]['config'][k] for k in PROTOCOL_FIELDS},schedule_sha256=sorted({v['schedule_sha256'] for v in configs}),critic=None)
+    c['flow_steps']=args.flow_steps if args.flow_steps is not None else snapshot['model_config']['num_inference_steps']
+    c['elite_count'],c['temperature']=args.elite_count,args.temperature
+    validate_options(args.pick, args.candidate_count, c['elite_count'], c['temperature'], c['flow_steps'])
     for effective in configs:
         validate_effective(effective,c)
     assets=[Path(snapshot['base_checkpoint'])/'model.safetensors']
     if snapshot['actor']:
         assets.append(Path(snapshot['actor']))
-    if args.pick=='greedy':
+    if args.pick in Q_MODES:
         smoke=args.smoke_config.resolve()
         c['smoke_config']={'path':str(smoke),'sha256':sha(smoke)}
         weights=args.q_weights.resolve(); stats=args.action_stats.resolve(); dino=args.dino.resolve()
@@ -190,7 +205,10 @@ if __name__ == '__main__':
     p.add_argument('--candidate-policy-id',required=True)
     p.add_argument('--continuation-policy-id',required=True,help='Same actor as candidate policy, replanned once per configured chunk')
     p.add_argument('--candidate-count',type=int,default=4)
-    p.add_argument('--pick',choices=('greedy','random'),default='greedy')
+    p.add_argument('--flow-steps',type=int,help='Number of flow steps per candidate; defaults to the actor setting')
+    p.add_argument('--elite-count',type=int,help='Number of complete BC-normalized chunks to average')
+    p.add_argument('--temperature',type=float,help='Positive softmax temperature for Q-weighted averaging')
+    p.add_argument('--pick',choices=('greedy','random',*MEAN_MODES),default='greedy')
     p.add_argument('--selection-seed',type=int,default=0)
     p.add_argument('--noise-namespace',default=DEFAULT_NOISE_NAMESPACE,help='Domain prefix for the independent candidate noise stream')
     p.add_argument('--q-config',type=Path,help='Q and camera configuration; defaults to exported metadata or model defaults')

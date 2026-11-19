@@ -16,9 +16,10 @@ from torch.utils._pytree import tree_map
 
 from ..config import DEFAULT_CONFIG, resolve_model_config
 from .contract import DEFAULT_NOISE_NAMESPACE
+from .planning import MEAN_MODES, Q_MODES, PlanningPool, aggregate, digest, sample_prefix_once, validate_options
 
 def derive_seed(domain, seed, noise_namespace=DEFAULT_NOISE_NAMESPACE):
-    if not isinstance(noise_namespace, str) or not noise_namespace.strip() or domain != 'extra3' or type(seed) is not int:
+    if not isinstance(noise_namespace, str) or not noise_namespace.strip() or domain not in ('extra3', 'pool') or type(seed) is not int:
         raise ValueError('Invalid independent noise stream')
     label = f'{noise_namespace}:{domain}:{seed}'.encode('utf-8')
     return int.from_bytes(hashlib.sha256(label).digest()[:8], 'big') & ((1 << 63)-1)
@@ -105,11 +106,11 @@ class QScorer:
 class CandidateRuntime:
     def __init__(self, components, scorer, *, device='cuda:0', observation_factory=None, bc_policy=None,
                  candidate_count=4, pick='greedy', selection_seed=0, noise_namespace=DEFAULT_NOISE_NAMESPACE,
-                 config=DEFAULT_CONFIG, flow_steps=10):
-        if type(candidate_count) is not int or candidate_count < 1:
-            raise ValueError('candidate_count must be positive')
-        if pick not in ('greedy', 'random') or (pick == 'greedy' and scorer is None):
-            raise ValueError('greedy selection requires a Q scorer')
+                 config=DEFAULT_CONFIG, flow_steps=10, elite_count=None, temperature=None):
+        validate_options(pick, candidate_count, elite_count, temperature, flow_steps)
+        if (pick in Q_MODES and scorer is None) or (pick == 'random_mean' and scorer is not None):
+            raise ValueError('Scored modes require Q and random modes are score-free')
+        self.elite_count, self.temperature = elite_count, temperature
         if type(selection_seed) is not int or not 0 <= selection_seed < (1 << 63):
             raise ValueError('selection_seed must be a nonnegative 63-bit integer')
         self.candidate_count, self.pick, self.selection_seed = candidate_count, pick, selection_seed
@@ -135,7 +136,8 @@ class CandidateRuntime:
         self._seed = seed
         self._pool_queries = 0
         self.bc_generator = torch.Generator(device=self.device).manual_seed(seed)
-        self.extra_seed = derive_seed('extra3', seed, self.noise_namespace)
+        domain = 'pool' if self.pick in MEAN_MODES else 'extra3'
+        self.extra_seed = derive_seed(domain, seed, self.noise_namespace)
         self.extra_generator = torch.Generator(device=self.device).manual_seed(self.extra_seed)
         return {'anchor_seed': seed, 'extra_seed': self.extra_seed}
 
@@ -198,9 +200,82 @@ class CandidateRuntime:
             candidates.append(np.clip(actions, -1., 1.))
         return np.stack(candidates), noise.detach().float().cpu().numpy()
 
+    def decode_action(self, state, normalized):
+        output = self.components.output_transform(dict(state=state.copy(), actions=normalized.copy()))
+        raw = np.asarray(output['actions'])
+        if raw.shape != (self.native_horizon, self.config.action_dim) or not np.isfinite(raw).all():
+            raise ValueError('Invalid decoded BC action chunk')
+        return raw
+
+    @torch.inference_mode()
+    def generate_planning_pool(self, observation):
+        if self._seed is None:
+            raise ValueError('reset_seed is required before a planning decision')
+        inputs = self.components.input_transform(copy.deepcopy(observation))
+        tensors = tree_map(lambda x: torch.from_numpy(np.array(x)).to(self.device)[None], inputs)
+        factory = self.observation_factory
+        if factory is None:
+            from openpi.models.model import Observation
+            factory = Observation.from_dict
+        shape = (self.candidate_count, self.native_horizon, self.noise_dim)
+        noise = torch.normal(0., 1., size=shape, dtype=torch.float32, device=self.device, generator=self.extra_generator)
+        output = sample_prefix_once(self.components.model, factory(tensors), noise, self.flow_steps)
+        if output.shape != noise.shape or output.dtype != torch.float32 or not torch.isfinite(output).all():
+            raise ValueError('Invalid BC-normalized action candidates')
+        normalized = output.cpu().numpy()
+        state = tensors['state'][0].cpu().numpy()
+        raw = np.stack([self.decode_action(state, row) for row in normalized])
+        self._pool_queries += 1
+        return PlanningPool(normalized, raw, noise.cpu().numpy(), state)
+
+    def _infer_mean(self, observation, remaining_steps):
+        start = time.perf_counter()
+        pool = self.generate_planning_pool(observation)
+        sampled = time.perf_counter()
+        views = [observation[key] for key in self.policy_camera_keys]
+        horizon = self.config.horizon
+        if self.scorer is None:
+            encoded = sampled
+            scores = None
+        else:
+            features = self.scorer.features(*views)
+            encoded = time.perf_counter()
+            scores = self.scorer.score(features, pool.raw[:, :horizon], horizon)
+        chunk, indices, weights = aggregate(pool.normalized, scores, self.elite_count, self.temperature, self.selection_rng)
+        selected = np.clip(np.asarray(self.decode_action(pool.state, chunk), dtype=np.float32), -1., 1.)
+        finished = time.perf_counter()
+        q_std = None
+        if scores is not None:
+            q_std = float(np.std(scores, ddof=1)) if len(scores)>1 else 0.
+        obs_hash = hashlib.sha256()
+        for k in (*self.policy_camera_keys, 'observation/state', 'prompt'):
+            a = np.asarray(observation[k])
+            obs_hash.update(json.dumps([k, a.dtype.str, a.shape]).encode())
+            obs_hash.update(np.ascontiguousarray(a).tobytes())
+        identity = self.scorer.identity if self.scorer is not None else {}
+        detail = dict(candidate_count=self.candidate_count, candidate_shape=list(pool.raw.shape), noise_shape=list(pool.noise.shape),
+                      sampling_recipe='shared_prefix_independent_noise', flowsteps=self.flow_steps, selection_mode=self.pick,
+                      selection_seed=self.selection_seed, noise_namespace=self.noise_namespace, noise_seed=self.extra_seed,
+                      elite_count=self.elite_count, temperature=self.temperature, selected_indices=indices, weights=weights,
+                      scores=scores.tolist() if scores is not None else None, q_min=float(scores.min()) if scores is not None else None,
+                      q_max=float(scores.max()) if scores is not None else None, q_mean=float(scores.mean()) if scores is not None else None,
+                      q_std=q_std, q_degenerate=q_std<1e-4 if q_std is not None else None, scored_horizon=horizon if scores is not None else None,
+                      remaining_horizon_mask=min(horizon, remaining_steps), pool_query_index=self._pool_queries,
+                      scorer_backend='torch_qplanning_offline_q' if self.scorer is not None else None,
+                      scorer_device=str(self.scorer.device) if self.scorer is not None else None,
+                      critic_seed=identity.get('seed'), critic_training_step=identity.get('training_step'), scorer_sha256=identity.get('sha256'),
+                      observation_sha256=obs_hash.hexdigest(), candidate_pool_sha256=digest(pool.raw), noise_sha256=digest(pool.noise),
+                      noise_candidates_distinct=len({row.tobytes() for row in pool.noise})==self.candidate_count,
+                      normalized_pool_sha256=digest(pool.normalized), normalized_action_sha256=digest(chunk), selected_action_sha256=digest(selected),
+                      candidate_generation_ms=1000*(sampled-start), feature_ms=1000*(encoded-sampled),
+                      critic_selection_ms=1000*(finished-encoded), total_ms=1000*(finished-start), device=str(self.device))
+        return selected, detail
+
     def infer(self, observation, *, remaining_steps):
         if type(remaining_steps) is not int or not 1 <= remaining_steps <= self.config.max_steps:
             raise ValueError('Remaining action count is outside the configured episode length')
+        if self.pick in MEAN_MODES:
+            return self._infer_mean(observation, remaining_steps)
         started = time.perf_counter()
         candidates, noise = self.generate_pool(observation)
         generated = time.perf_counter()

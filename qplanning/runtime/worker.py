@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from ..config import QConfig
+from .planning import Q_MODES
 from .contract import algorithm, require, validate_contract
 
 
@@ -44,10 +45,11 @@ def load_runtime(request, *, device='cuda:0'):
         pi05.restore_actor(components, settings, actor.parent)
     require(all(not p.requires_grad for p in components.model.parameters()), 'base policy must stay frozen')
     config = QConfig.from_dict(value['q_config'])
-    scorer = QScorer(value['critic'], device, config) if value['pick']=='greedy' else None
+    scorer = QScorer(value['critic'], device, config) if value['pick'] in Q_MODES else None
     return CandidateRuntime(components, scorer, device=device, candidate_count=value['candidate_count'],
                             pick=value['pick'], selection_seed=value['selection_seed'], config=config,
-                            flow_steps=settings['num_inference_steps'], noise_namespace=value['noise_namespace']), value
+                            flow_steps=value.get('flow_steps', settings['num_inference_steps']), noise_namespace=value['noise_namespace'],
+                            elite_count=value.get('elite_count'), temperature=value.get('temperature')), value
 
 
 def main():
@@ -75,7 +77,8 @@ def main():
         reply(dict(ready=True, identity=value['snapshot']['content_sha256'], runtime_composite_sha256=value['composite_sha256'],
                    inference_algorithm=algorithm(value), candidate_count=runtime.candidate_count,
                    native_horizon=runtime.native_horizon, noise_namespace=runtime.noise_namespace,
-                   pick=runtime.pick, device=str(runtime.device), critic=value['critic']))
+                   pick=runtime.pick, flow_steps=runtime.flow_steps, elite_count=runtime.elite_count, temperature=runtime.temperature,
+                   device=str(runtime.device), critic=value['critic']))
         seeded, queries = False, 0
         for line in sys.stdin:
             request = json.loads(line)

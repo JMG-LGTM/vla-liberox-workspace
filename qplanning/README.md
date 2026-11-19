@@ -22,3 +22,11 @@
 ## CPU 回归
 
 `python -m qplanning.check_training` 覆盖数据窗口、输入形状、梯度规则、恢复和导出。`python -m qplanning.runtime.check_runtime` 检查候选生成、选择随机数流和 smoke 证明。特定实验的归档权重、数据和对照脚本由实验目录管理。
+
+### 归一化动作块的加权规划
+
+使用 `--pick weighted --candidate-count N --elite-count K --temperature T --flow-steps F` 可对 N 个候选的期望 Q 排序，从最高的 K 个计算 `softmax((Q - max(Q)) / T)`。使用 `--pick random_mean` 时，同一噪声流生成相同候选，独立的选择种子均匀、无放回地抽取 K 个，再等权平均。两个模式都先在策略的归一化空间平均完整动作块，再解码并裁剪环境动作。候选采样步数可以独立于已注册模型设置。
+
+每次决策复用一个图像和指令前缀缓存，候选分别使用原生单样本去噪。加权模式对原始单位动作的前 H 步使用训练集统计归一化，复用一份视觉特征，批量计算所有候选的 Q。环境在最后一次决策只执行剩余步数。轨迹记录包括每槽 Q、最小值、最大值、均值、样本标准差、选中下标与权重。样本标准差小于 `1e-4` 的决策标记为退化。
+
+`python -m qplanning.runtime.check_planning` 在 CPU 上测试完整动作块加权、选择随机数、共享前缀以及与 OpenPI 原生单条采样的等价性。GPU smoke 对每个实际候选逐项核对原生归一化输出与解码输出，核对本次 Q 的离线分数并独立重算聚合动作。可用 `--reference-proof` 提供已经验证的归档评分记录。

@@ -13,6 +13,7 @@ import numpy as np
 from backend.app.policies.pi05 import Pi05PolicyProvider as OriginalProvider
 from backend.app.policies.registry import model_module
 from ..config import QConfig
+from .planning import MEAN_MODES, Q_MODES, digest, elite_weights
 from .contract import HERE, algorithm, require, validate_contract
 
 BACKEND = 'torch_qplanning_offline_q'
@@ -70,6 +71,8 @@ class QPlanningProvider(OriginalProvider):
                         and ready.get('runtime_composite_sha256') == value['composite_sha256']
                         and ready.get('inference_algorithm') == algorithm(value) and ready.get('candidate_count') == value['candidate_count']
                         and ready.get('pick') == value['pick'] and ready.get('device') == 'cuda:0'
+                        and ready.get('flow_steps') == value.get('flow_steps', entry.settings['num_inference_steps'])
+                        and ready.get('elite_count') == value.get('elite_count') and ready.get('temperature') == value.get('temperature')
                         and ready.get('critic') == value['critic'] and ready.get('noise_namespace') == value['noise_namespace']
                         and type(ready.get('native_horizon')) is int and ready['native_horizon'] >= config.horizon,
                         'worker initialization differs')
@@ -127,22 +130,30 @@ class QPlanningProvider(OriginalProvider):
             d = result['diagnostics']
             count, pick = self._q_contract['candidate_count'], self._q_contract['pick']
             require(d['candidate_count'] == count and d['candidate_shape'] == [count, self._native_horizon, config.action_dim]
-                    and d['sampling_recipe'] == f'bc_anchor_single1_plus_independent{count-1}_v1'
                     and d['selection_mode'] == pick and d['selection_seed'] == self._q_contract['selection_seed']
-                    and d['noise_namespace'] == self._q_contract['noise_namespace']
-                    and 0 <= d['selected_index'] < count and d['flowsteps'] == self.current_policy_entry.settings['num_inference_steps']
-                    and d['remaining_horizon_mask'] == min(config.horizon,remaining) and d['slot0_original_policy_infer']
-                    and d['selected_action_matches_candidate'] and d['noise_candidates_distinct'], 'invalid candidate pool or selection')
-            if pick == 'greedy':
+                    and d['noise_namespace'] == self._q_contract['noise_namespace'] and d['noise_candidates_distinct']
+                    and d['flowsteps'] == self._q_contract.get('flow_steps', self.current_policy_entry.settings['num_inference_steps'])
+                    and d['remaining_horizon_mask'] == min(config.horizon,remaining), 'invalid candidate pool or horizon')
+            if pick in Q_MODES:
                 critic = self._q_contract['critic']
                 require(d['scorer_backend'] == critic['backend'] and d['scorer_device'] == 'cuda:0'
                         and d['scorer_sha256'] == critic['sha256'] and d['critic_seed'] == critic['seed']
-                        and d['critic_training_step'] == critic['training_step']
-                        and d['selected_index'] == int(np.argmax(d['scores'])) and d['scored_action_is_executed_clipped'],
-                        'invalid Q selection evidence')
+                        and d['critic_training_step'] == critic['training_step'], 'unexpected Q scorer')
             else:
-                require(d['scores'] is None and d['selected_index'] == int(self._selection_rng.integers(count)),
-                        'fixed uniform selection differs')
+                require(d['scores'] is None and d['scorer_backend'] is None, 'random selector used a scorer')
+            if pick in MEAN_MODES:
+                elites = self._q_contract['elite_count']
+                temperature = self._q_contract['temperature']
+                idx, weights = elite_weights(count, d['scores'], elites, temperature, self._selection_rng)
+                require(d['sampling_recipe']=='shared_prefix_independent_noise' and d['elite_count']==elites
+                        and d['temperature']==temperature and d['selected_indices']==idx.tolist() and d['weights']==weights.tolist()
+                        and d['selected_action_sha256']==digest(actions)
+                        and d['scored_horizon']==(config.horizon if pick in Q_MODES else None), 'invalid aggregate or scorer horizon')
+            else:
+                require(d['sampling_recipe'] == f'bc_anchor_single1_plus_independent{count-1}_v1'
+                        and d['slot0_original_policy_infer'] and d['selected_action_matches_candidate'], 'invalid selected candidate')
+                expected = np.argmax(d['scores']) if pick=='greedy' else self._selection_rng.integers(count)
+                require(d['selected_index'] == expected, 'selected candidate differs')
             self._queries += 1
             self._trace(dict(event='infer', trial=self._trial, query=self._queries, remaining_steps=remaining,
                              composite_sha256=self._q_contract['composite_sha256'], **d))

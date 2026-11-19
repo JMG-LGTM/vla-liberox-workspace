@@ -8,6 +8,7 @@ import signal
 import sys
 import threading
 
+from .planning import MEAN_MODES
 from .contract import gpu_lock, read, validate_contract, validate_effective, validate_smoke, require
 
 
@@ -15,7 +16,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--runtime-contract', type=Path, required=True)
-    parser.add_argument('--pick', choices=('greedy','random'), help='Assert the selection mode sealed in the runtime contract')
+    parser.add_argument('--pick', choices=('greedy','random',*MEAN_MODES), help='Assert the selection mode sealed in the runtime contract')
     parser.add_argument('--output-dir', type=Path, help='Assert effective_config result directory (platform output owner)')
     parser.add_argument('--smoke-proof', type=Path, required=True)
     args = parser.parse_args(argv)

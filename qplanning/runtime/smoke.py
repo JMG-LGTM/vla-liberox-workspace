@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import numpy as np
+from .planning import MEAN_MODES, Q_MODES
 from .contract import atomic_json, gpu_lock, require, validate_contract
 from .reference_probe import check_limits, load_spec, offline_scores, run_reference, score_errors, validate_reference
 
@@ -21,6 +22,7 @@ def main(argv=None):
     p.add_argument('--runtime-contract', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--observation', type=Path, required=True, help='Policy-oriented observation with the configured camera views')
+    p.add_argument('--reference-proof', type=Path, help='Reuse a GPU reference report for the same sealed archive assets')
     p.add_argument('--train-frames', type=Path, help='Cached feature fixtures for greedy smoke')
     p.add_argument('--q-fixture', type=Path, help='Optional raw candidate fixture for the current critic; defaults to configured reference inputs')
     p.add_argument('--trial-seeds', type=int, nargs='+', required=True)
@@ -32,80 +34,16 @@ def main(argv=None):
         return smoke_locked(a,c)
 
 
-def smoke_locked(a,c):
-    seed = (c['critic'] or {}).get('seed')
+def check_single_selection(runtime, c, observation, trials, remaining):
     import torch
-    from .runtime_core import q_numerics
-    archived = None
-    if c['pick']=='greedy':
-        require(a.train_frames is not None,'greedy smoke requires cached feature fixtures')
-        spec=load_spec(c)
-        with q_numerics(), torch.random.fork_rng(devices=[0]):
-            archived=run_reference(spec,torch.device('cuda:0'))
-        validate_reference(archived,spec)
-
-    import sys
-    workspace = Path(c['workspace'])
-    terminal = workspace/'liberox-vla-adapter-terminal'
-    sys.path[:0] = [str(terminal),str(terminal/'scripts')]
-    from backend.app.policies.snapshots import catalog_from_snapshot
-    raw = c['snapshot']
-    entry = catalog_from_snapshot(raw,a.output.parent/'.empty-policy-registry').select(raw['policy_id'])
-    request = dict(runtime_contract=str(a.runtime_contract), policy_id=entry.policy_id, content_sha256=entry.content_sha256,
-                   base_revision=entry.base_revision,runtime_composite_sha256=c['composite_sha256'],model=entry.settings,
-                   actor=str(entry.actor) if entry.actor else None,actor_sha256=entry.component_sha256.get('actor'),parent=entry.parent)
-    from .worker import load_runtime
-    runtime, _ = load_runtime(request, device='cuda:0')
     from openpi.policies.policy import Policy
-    require(runtime.device.type == 'cuda' and torch.cuda.is_initialized(), 'GPU inference required')
-    flags = backend_flags(torch)
-    scorer = runtime.scorer
-
-    parity=None
-    if c['pick']=='greedy':
-        with np.load(a.train_frames) as z:
-            frames = {k: z[k] for k in z.files}
-        view_fields=spec['view_fields']
-        feature_errors = []
-        for *views, cached in zip(*(frames[k] for k in view_fields),frames['features'],strict=True):
-            online=scorer.features(*views)[0].float().cpu().numpy()
-            feature_errors.append(float(np.abs(online-cached.astype(np.float32)).max()))
-        require(max(feature_errors)<=spec['feature_atol'],f'online feature error: {max(feature_errors)}')
-
-        fixture_path=a.q_fixture or spec['assets']['fixture']['path']
-        with np.load(fixture_path,allow_pickle=False) as z:
-            fixture={k:z[k] for k in (*view_fields,spec['candidate_field'])}
-        actions=fixture[spec['candidate_field']]
-        online=np.stack([scorer.score(scorer.features(*views),cand,runtime.config.horizon)
-                         for *views,cand in zip(*(fixture[k] for k in view_fields),actions,strict=True)])
-        with q_numerics():
-            offline=offline_scores(scorer.net,scorer.dino,fixture,spec,scorer.device,scorer.mean,scorer.std,runtime.config)
-        parity=score_errors(online,offline)
-        check_limits(parity,dict(spec,score_shape=list(actions.shape[:2])))
-        tail=actions[0]
-        horizon=runtime.config.horizon
-        if horizon>1:
-            masked_length=horizon-1
-            masked=tail.copy()
-            masked[:,masked_length:]=np.clip(masked[:,masked_length:]+.5,-1.,1.)
-            features=scorer.features(*(fixture[k][0] for k in view_fields))
-            require(np.array_equal(scorer.score(features,tail,masked_length),scorer.score(features,masked,masked_length)),
-                    'masked tail actions changed Q')
-        require(backend_flags(torch)==flags,'Q scoring changed process-wide attention flags')
-        parity.update(checkpoint_sha256=c['critic']['sha256'],training_feature_frames=len(feature_errors),
-                      feature_max_abs_error=max(feature_errors))
-
-    with np.load(a.observation, allow_pickle=False) as data:
-        observation = {k: data[k] for k in data.files}
-    observation['prompt'] = a.prompt
+    horizon = runtime.config.horizon
     baseline = Policy(runtime.components.model, transforms=[runtime.components.input_transform],
                       output_transforms=[runtime.components.output_transform], is_pytorch=True,
-                      pytorch_device='cuda:0', sample_kwargs={'num_steps': raw['model_config']['num_inference_steps']})
-    steps, horizon = runtime.config.max_steps, runtime.config.horizon
-    remaining = [steps-i*horizon for i in range(3) if steps>i*horizon]+[min(steps,max(1,horizon-1))]
+                      pytorch_device='cuda:0', sample_kwargs={'num_steps': runtime.flow_steps})
     diagnostics, checks = [], []
     original_sample = runtime.components.model.sample_noise
-    for trial in a.trial_seeds:
+    for trial in trials:
         baseline_noise = []
 
         def capture_noise(shape, device):
@@ -154,19 +92,103 @@ def smoke_locked(a,c):
                 checks.append(dict(seed=trial, query=query, noise_exact=True, actions_exact=True, per_slot_max_abs=slot_errors))
         finally:
             runtime.generate_pool = original_pool
+    return diagnostics, checks
+
+
+def smoke_locked(a,c):
+    seed = (c['critic'] or {}).get('seed')
+    import torch
+    from .runtime_core import q_numerics
+    archived = None
+    if c['pick'] in Q_MODES:
+        require(a.train_frames is not None,'greedy smoke requires cached feature fixtures')
+        spec=load_spec(c)
+        if getattr(a,'reference_proof',None):
+            archived=json.loads(Path(a.reference_proof).read_text())
+        else:
+            with q_numerics(), torch.random.fork_rng(devices=[0]):
+                archived=run_reference(spec,torch.device('cuda:0'))
+        validate_reference(archived,spec)
+
+    import sys
+    workspace = Path(c['workspace'])
+    terminal = workspace/'liberox-vla-adapter-terminal'
+    sys.path[:0] = [str(terminal),str(terminal/'scripts')]
+    from backend.app.policies.snapshots import catalog_from_snapshot
+    raw = c['snapshot']
+    entry = catalog_from_snapshot(raw,a.output.parent/'.empty-policy-registry').select(raw['policy_id'])
+    request = dict(runtime_contract=str(a.runtime_contract), policy_id=entry.policy_id, content_sha256=entry.content_sha256,
+                   base_revision=entry.base_revision,runtime_composite_sha256=c['composite_sha256'],model=entry.settings,
+                   actor=str(entry.actor) if entry.actor else None,actor_sha256=entry.component_sha256.get('actor'),parent=entry.parent)
+    from .worker import load_runtime
+    runtime, _ = load_runtime(request, device='cuda:0')
+    require(runtime.device.type == 'cuda' and torch.cuda.is_initialized(), 'GPU inference required')
+    flags = backend_flags(torch)
+    scorer = runtime.scorer
+
+    parity=None
+    if c['pick'] in Q_MODES:
+        with np.load(a.train_frames) as z:
+            frames = {k: z[k] for k in z.files}
+        view_fields=spec['view_fields']
+        feature_errors = []
+        for *views, cached in zip(*(frames[k] for k in view_fields),frames['features'],strict=True):
+            online=scorer.features(*views)[0].float().cpu().numpy()
+            feature_errors.append(float(np.abs(online-cached.astype(np.float32)).max()))
+        require(max(feature_errors)<=spec['feature_atol'],f'online feature error: {max(feature_errors)}')
+
+        fixture_path=a.q_fixture or spec['assets']['fixture']['path']
+        with np.load(fixture_path,allow_pickle=False) as z:
+            fixture={k:z[k] for k in (*view_fields,spec['candidate_field'])}
+        actions=fixture[spec['candidate_field']]
+        online=np.stack([scorer.score(scorer.features(*views),cand,runtime.config.horizon)
+                         for *views,cand in zip(*(fixture[k] for k in view_fields),actions,strict=True)])
+        with q_numerics():
+            offline=offline_scores(scorer.net,scorer.dino,fixture,spec,scorer.device,scorer.mean,scorer.std,runtime.config)
+        parity=score_errors(online,offline)
+        check_limits(parity,dict(spec,score_shape=list(actions.shape[:2])))
+        tail=actions[0]
+        horizon=runtime.config.horizon
+        if horizon>1:
+            masked_length=horizon-1
+            masked=tail.copy()
+            masked[:,masked_length:]=np.clip(masked[:,masked_length:]+.5,-1.,1.)
+            features=scorer.features(*(fixture[k][0] for k in view_fields))
+            require(np.array_equal(scorer.score(features,tail,masked_length),scorer.score(features,masked,masked_length)),
+                    'masked tail actions changed Q')
+        require(backend_flags(torch)==flags,'Q scoring changed process-wide attention flags')
+        parity.update(checkpoint_sha256=c['critic']['sha256'],training_feature_frames=len(feature_errors),
+                      feature_max_abs_error=max(feature_errors))
+
+    with np.load(a.observation, allow_pickle=False) as data:
+        observation = {k: data[k] for k in data.files}
+    observation['prompt'] = a.prompt
+    steps, horizon = runtime.config.max_steps, runtime.config.horizon
+    remaining = [steps-i*horizon for i in range(3) if steps>i*horizon]+[min(steps,max(1,horizon-1))]
+    if runtime.pick in MEAN_MODES:
+        from .planning_smoke import PlanningParityError, check_planning
+        try:
+            diagnostics, checks = check_planning(runtime, observation, a.trial_seeds, remaining)
+        except PlanningParityError as exc:
+            atomic_json(a.output,dict(status='FAIL_QPLANNING_GPU_SMOKE',pick=c['pick'],composite_sha256=c['composite_sha256'],
+                                      failure=exc.evidence))
+            raise
+    else:
+        diagnostics, checks = check_single_selection(runtime, c, observation, a.trial_seeds, remaining)
     require(backend_flags(torch) == flags, 'attention flags changed during inference')
     require(all(not q.requires_grad for q in runtime.components.model.parameters()), 'actor is trainable')
     proof = dict(status='PASS_QPLANNING_GPU_SMOKE', observed_at=datetime.now(timezone.utc).isoformat(),
                  critic_seed=seed, composite_sha256=c['composite_sha256'], attention_flags=flags,
                  scorer_parity=parity, reference_gpu=archived, candidate_policy_id=c['candidate_policy_id'], pick=c['pick'],
                  bc_checks=checks, simulator_rollout_executed=False,
+                 candidate_diagnostics=diagnostics if runtime.pick in MEAN_MODES else None,
                  latency_ms=dict(total=float(np.median([d['total_ms'] for d in diagnostics])),
                                  candidates=float(np.median([d['candidate_generation_ms'] for d in diagnostics])),
                                  features=float(np.median([d['feature_ms'] for d in diagnostics])),
                                  q=float(np.median([d['critic_selection_ms'] for d in diagnostics]))),
                  peak_allocated_bytes=torch.cuda.max_memory_allocated(), peak_reserved_bytes=torch.cuda.max_memory_reserved())
     atomic_json(a.output, proof)
-    print(json.dumps({k: v for k, v in proof.items() if k != 'bc_checks'}))
+    print(json.dumps({k: v for k, v in proof.items() if k not in ('bc_checks','candidate_diagnostics')}))
 
 
 if __name__ == '__main__':
