@@ -35,7 +35,14 @@ def validate_score_tolerance(tolerance):
         raise ValueError('The offline score tolerance must be a finite nonnegative number')
 
 
-def compare_scores(online, offline, elites, tolerance):
+class PlanningParityError(ValueError):
+    def __init__(self, evidence):
+        self.evidence = evidence
+        location = {key: evidence[key] for key in ('fixture_row', 'seed', 'query', 'score_max_abs') if key in evidence}
+        super().__init__(f"{evidence['stage']} failed {location}")
+
+
+def compare_scores(online, offline, elites, tolerance, *, rank_singleton=True):
     """Compare same-state candidate scores; ranking diagnostics do not gate acceptance."""
     import numpy as np
     import torch
@@ -70,8 +77,10 @@ def compare_scores(online, offline, elites, tolerance):
     other_top1 = int(offline.argmax())
     # Scaling before the mean avoids overflow for large finite differences.
     result.update(within_tolerance=maximum <= tolerance, score_max_abs=maximum,
-                  score_mean_abs=float(maximum * np.mean(difference / maximum)) if maximum else 0.,
-                  online_top1=top1, offline_top1=other_top1, top1_same=top1 == other_top1)
+                  score_mean_abs=float(maximum * np.mean(difference / maximum)) if maximum else 0.)
+    if len(online) == 1 and not rank_singleton:
+        return result
+    result.update(online_top1=top1, offline_top1=other_top1, top1_same=top1 == other_top1)
     if elites is not None and elites <= len(online):
         # Match the planner's CPU top-K operator, including ties at its cutoff.
         top = torch.from_numpy(online).topk(elites).indices.tolist()

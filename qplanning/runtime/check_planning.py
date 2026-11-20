@@ -1,5 +1,7 @@
 """CPU regression for the averaged planners, using OpenPI's native sampler on a tiny actor."""
 import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -130,10 +132,80 @@ def check_runtime_scores(runtime, observation):
             assert exc.evidence['stage']=='offline_candidate_scores' and not exc.evidence['within_tolerance']
         else:
             raise AssertionError('The default did not require exact scores')
+    # Preserve complete earlier queries when a later live comparison fails.
+    with patch.object(runtime.scorer,'score',return_value=online), patch('qplanning.features.encode'), \
+            patch('qplanning.c_score.candidate_scores',side_effect=[offline[None],online[None]+.006]):
+        try:
+            check_planning(runtime,observation,[2],[8,7],score_max_abs_tolerance=.005)
+        except PlanningParityError as exc:
+            evidence=exc.evidence
+            assert (evidence['stage'],evidence['seed'],evidence['query'])==('offline_candidate_scores',2,1)
+            assert len(evidence['completed_bc_checks'])==len(evidence['completed_candidate_diagnostics'])==1
+            assert evidence['completed_bc_checks'][0]['score_comparison']['within_tolerance']
+            assert len(evidence['online_scores'])==len(evidence['offline_scores'])==count
+            json.dumps(evidence,allow_nan=False)
+        else:
+            raise AssertionError('A later over-limit live query passed')
+
+
+def check_archive_scope():
+    from .contract import sha
+    from .reference_probe import load_spec, score_errors, score_matrix, validate_reference
+    from .smoke import fixture_score_parity
+    limit=.005
+    offline=np.tile([0.,limit,0.,0.],(40,1))
+    online=np.tile([limit,0.,0.,0.],(40,1))
+    with TemporaryDirectory() as folder:
+        path=Path(folder)/'scores.json'
+        path.write_text(json.dumps({'scores':offline.tolist()}))
+        asset=dict(path=path.name,sha256=sha(path))
+        spec=dict(assets={'scores':asset},score_field_path=['scores'],score_shape=[40,4],
+                  limits=dict(max_abs_error=.001,mean_abs_error=.0001,min_top1_agreement=.9))
+        config=Path(folder)/'ref.json'
+        config.write_text(json.dumps(spec))
+        binding=dict(smoke_config=dict(path=str(config),sha256=sha(config)),score_max_abs_tolerance=limit,elite_count=16)
+        common=dict(device_type='cuda',asset_sha256={'scores':asset['sha256']})
+        legacy=load_spec(binding)
+        spec=load_spec(dict(binding,include_archive_in_score_tolerance=True))
+        matches=score_matrix(online,offline,(40,4),16,limit)
+        assert matches['within_tolerance'] and matches['top1_agreement']==0 and matches['max_abs_error']==limit
+        assert all(row['topk_overlap'] is None for row in matches['score_comparisons'])
+        validate_reference(dict(common,**matches),spec)
+        legacy_report=dict(common,**score_errors(online,offline))
+        for bad_report,bad_spec in ((legacy_report,spec),(legacy_report,legacy),
+                                   (dict(common,**dict(matches,mean_abs_error=99)),spec)):
+            try:
+                validate_reference(bad_report,bad_spec)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('Malformed proof or legacy over-limit score accepted')
+        validate_reference(dict(common,**score_errors(offline,offline)),legacy)
+        online[7,0]=np.nextafter(limit,np.inf)
+        online[35,3]=float('inf')
+        failed=score_matrix(online,offline,(40,4),16,limit)
+        assert failed['failed_rows']==[7,35] and failed['first_failed_row']==7 and failed['mean_abs_error'] is None
+        for run,stage in ((lambda:validate_reference(dict(common,**failed),spec),'archive_reference_scores'),
+                          (lambda:fixture_score_parity(online,offline,online.shape,
+                                  dict(binding,include_archive_in_score_tolerance=True),spec),'fixture_offline_scores')):
+            try:
+                run()
+            except PlanningParityError as exc:
+                assert exc.evidence['stage']==stage and exc.evidence['fixture_row']==7
+                assert exc.evidence['score_matrix']==failed and len(failed['score_comparisons'])==40
+                assert failed['score_comparisons'][35]['nonfinite_online_indices']==[3]
+                json.dumps(exc.evidence,allow_nan=False)
+            else:
+                raise AssertionError('An over-limit or nonfinite matrix passed')
+    singleton=score_matrix([[0],[1]],[[limit],[1]],(2,1),16,limit)
+    assert singleton['top1_agreement'] is None and singleton['within_tolerance']
+    assert all(row[key] is None for row in singleton['score_comparisons']
+               for key in ('online_top1','offline_top1','top1_same','topk_overlap','spearman'))
 
 
 def check():
     check_score_evidence()
+    check_archive_scope()
     rng=np.random.default_rng(37)
     norm=rng.normal(size=(5,7,3)).astype('float32')
     scores=np.array([-.3,.1,.2,.4,.3],dtype=np.float32)

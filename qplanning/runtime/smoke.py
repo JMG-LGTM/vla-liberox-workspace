@@ -6,9 +6,10 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import numpy as np
-from .planning import MEAN_MODES, Q_MODES
+from .planning import MEAN_MODES, Q_MODES, PlanningParityError
 from .contract import atomic_json, gpu_lock, require, validate_contract
-from .reference_probe import check_limits, load_spec, offline_scores, run_reference, score_errors, validate_reference
+from .reference_probe import (check_limits, load_spec, offline_scores, require_matrix_pass, run_reference,
+                              score_errors, score_matrix, validate_reference)
 
 
 def backend_flags(torch):
@@ -102,37 +103,33 @@ def fixture_score_parity(online, offline, shape, contract, spec):
         check_limits(report,dict(spec,score_shape=list(shape)))
         return report
 
-    from .planning import compare_scores
-    from .planning_smoke import PlanningParityError
-    require(online.shape==offline.shape==tuple(shape) and online.ndim==2 and online.size>0,
-            'current-critic fixture score shape differs')
-    rows=[compare_scores(x,y,contract.get('elite_count'),contract['score_max_abs_tolerance'])
-          for x,y in zip(online,offline,strict=True)]
-    for index,row in enumerate(rows):
-        if not row['within_tolerance']:
-            raise PlanningParityError(dict(stage='fixture_offline_scores',fixture_row=index,shape=list(shape),**row))
-    return dict(shape=list(shape),tolerance=contract['score_max_abs_tolerance'],within_tolerance=True,
-                max_abs_error=max(r['score_max_abs'] for r in rows),
-                mean_abs_error=float(np.mean([r['score_mean_abs'] for r in rows])),
-                top1_agreement=float(np.mean([r['top1_same'] for r in rows])),score_comparisons=rows)
+    report=score_matrix(online,offline,shape,contract.get('elite_count'),contract['score_max_abs_tolerance'],
+                        rank_singleton=not contract.get('include_archive_in_score_tolerance'))
+    require_matrix_pass(report,'fixture_offline_scores')
+    return report
 
 
 def smoke_locked(a,c):
-    from .planning_smoke import PlanningParityError
+    progress={}
     try:
-        return _smoke_locked(a,c)
-    except PlanningParityError as exc:
+        return _smoke_locked(a,c,progress)
+    except (ValueError,RuntimeError,FloatingPointError) as exc:
+        stage=progress.pop('stage','smoke_setup')
+        failure=exc.evidence if isinstance(exc,PlanningParityError) else dict(stage=stage,error=str(exc))
+        if failure.get('stage')=='fixture_offline_scores' and 'score_matrix' in failure:
+            progress['scorer_parity']=failure['score_matrix']
         atomic_json(a.output,dict(status='FAIL_QPLANNING_GPU_SMOKE',pick=c['pick'],composite_sha256=c['composite_sha256'],
-                                  failure=exc.evidence))
+                                  failure=failure,**progress))
         raise
 
 
-def _smoke_locked(a,c):
+def _smoke_locked(a,c,progress):
     seed = (c['critic'] or {}).get('seed')
     import torch
     from .runtime_core import q_numerics
     archived = None
     if c['pick'] in Q_MODES:
+        progress['stage']='archive_reference_scores'
         require(a.train_frames is not None,'greedy smoke requires cached feature fixtures')
         spec=load_spec(c)
         if getattr(a,'reference_proof',None):
@@ -140,8 +137,10 @@ def _smoke_locked(a,c):
         else:
             with q_numerics(), torch.random.fork_rng(devices=[0]):
                 archived=run_reference(spec,torch.device('cuda:0'))
+        progress['reference_gpu']=archived
         validate_reference(archived,spec)
 
+    progress['stage']='load_runtime'
     import sys
     workspace = Path(c['workspace'])
     terminal = workspace/'liberox-vla-adapter-terminal'
@@ -160,6 +159,7 @@ def _smoke_locked(a,c):
 
     parity=None
     if c['pick'] in Q_MODES:
+        progress['stage']='training_feature_parity'
         with np.load(a.train_frames) as z:
             frames = {k: z[k] for k in z.files}
         view_fields=spec['view_fields']
@@ -169,15 +169,28 @@ def _smoke_locked(a,c):
             feature_errors.append(float(np.abs(online-cached.astype(np.float32)).max()))
         require(max(feature_errors)<=spec['feature_atol'],f'online feature error: {max(feature_errors)}')
 
+        progress['stage']='fixture_offline_scores'
         fixture_path=a.q_fixture or spec['assets']['fixture']['path']
         with np.load(fixture_path,allow_pickle=False) as z:
             fixture={k:z[k] for k in (*view_fields,spec['candidate_field'])}
         actions=fixture[spec['candidate_field']]
-        online=np.stack([scorer.score(scorer.features(*views),cand,runtime.config.horizon)
-                         for *views,cand in zip(*(fixture[k] for k in view_fields),actions,strict=True)])
-        with q_numerics():
-            offline=offline_scores(scorer.net,scorer.dino,fixture,spec,scorer.device,scorer.mean,scorer.std,runtime.config)
+        online=[]
+        for index,(*views,cand) in enumerate(zip(*(fixture[k] for k in view_fields),actions,strict=True)):
+            try:
+                online.append(scorer.score(scorer.features(*views),cand,runtime.config.horizon))
+            except (ValueError,RuntimeError,FloatingPointError) as exc:
+                raise PlanningParityError(dict(stage='fixture_runtime_scores',fixture_row=index,error=str(exc),
+                                               completed_online_scores=[row.tolist() for row in online])) from exc
+        online=np.stack(online)
+        try:
+            with q_numerics():
+                offline=offline_scores(scorer.net,scorer.dino,fixture,spec,scorer.device,scorer.mean,scorer.std,runtime.config)
+        except (ValueError,RuntimeError,FloatingPointError) as exc:
+            raise PlanningParityError(dict(stage='fixture_offline_scores',error=str(exc),
+                                           completed_online_scores=online.tolist())) from exc
         parity=fixture_score_parity(online,offline,actions.shape[:2],c,spec)
+        progress['scorer_parity']=parity
+        progress['stage']='masked_tail_invariance'
         tail=actions[0]
         horizon=runtime.config.horizon
         if horizon>1:
@@ -187,10 +200,12 @@ def _smoke_locked(a,c):
             features=scorer.features(*(fixture[k][0] for k in view_fields))
             require(np.array_equal(scorer.score(features,tail,masked_length),scorer.score(features,masked,masked_length)),
                     'masked tail actions changed Q')
+        progress['stage']='scoring_backend_flags'
         require(backend_flags(torch)==flags,'Q scoring changed process-wide attention flags')
         parity.update(checkpoint_sha256=c['critic']['sha256'],training_feature_frames=len(feature_errors),
                       feature_max_abs_error=max(feature_errors))
 
+    progress['stage']='live_candidate_checks'
     with np.load(a.observation, allow_pickle=False) as data:
         observation = {k: data[k] for k in data.files}
     observation['prompt'] = a.prompt
@@ -199,10 +214,13 @@ def _smoke_locked(a,c):
     if runtime.pick in MEAN_MODES:
         from .planning_smoke import check_planning
         diagnostics, checks = check_planning(runtime, observation, a.trial_seeds, remaining,
-                                             score_max_abs_tolerance=c.get('score_max_abs_tolerance',0.))
+                                             score_max_abs_tolerance=c.get('score_max_abs_tolerance',0.),
+                                             rank_singleton=not c.get('include_archive_in_score_tolerance'))
     else:
         diagnostics, checks = check_single_selection(runtime, c, observation, a.trial_seeds, remaining)
+    progress.update(bc_checks=checks,candidate_diagnostics=diagnostics,stage='inference_backend_flags')
     require(backend_flags(torch) == flags, 'attention flags changed during inference')
+    progress['stage']='frozen_actor'
     require(all(not q.requires_grad for q in runtime.components.model.parameters()), 'actor is trainable')
     proof = dict(status='PASS_QPLANNING_GPU_SMOKE', observed_at=datetime.now(timezone.utc).isoformat(),
                  critic_seed=seed, composite_sha256=c['composite_sha256'], attention_flags=flags,

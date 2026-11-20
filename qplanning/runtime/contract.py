@@ -74,7 +74,7 @@ def verify_score_comparison(record, contract, candidate_count):
     require(isinstance(record,dict) and len(record.get('online_scores',[]))==candidate_count,
             'missing or incomplete score comparison')
     expected=compare_scores(record['online_scores'],record['offline_scores'],contract.get('elite_count'),
-                            contract['score_max_abs_tolerance'])
+                            contract['score_max_abs_tolerance'],rank_singleton=not contract.get('include_archive_in_score_tolerance'))
     require(expected==record and expected['within_tolerance'], 'recorded scores exceed tolerance or diagnostics differ')
 
 
@@ -105,9 +105,13 @@ def validate_smoke(proof, contract):
             else:
                 require(all(c.get('offline_scores_exact') for c in proof['bc_checks']), 'missing current offline candidate score parity')
     if contract['pick'] in Q_MODES:
-        from .reference_probe import load_spec, validate_reference
+        from .reference_probe import load_spec, validate_reference, verify_score_matrix
         validate_reference(proof.get('reference_gpu',{}),load_spec(contract))
-        if 'score_max_abs_tolerance' in contract:
+        if contract.get('include_archive_in_score_tolerance'):
+            parity=proof['scorer_parity']
+            verify_score_matrix(parity,parity['shape'],contract.get('elite_count'),
+                                contract['score_max_abs_tolerance'],'fixture_offline_scores')
+        elif 'score_max_abs_tolerance' in contract:
             parity=proof['scorer_parity']
             rows=parity.get('score_comparisons',[])
             require(rows and len(rows)==parity['shape'][0], 'missing same-device fixture score evidence')
@@ -157,6 +161,9 @@ def validate_contract(path, *, verify_payloads=False):
             'invalid selector')
     if 'score_max_abs_tolerance' in c:
         validate_score_tolerance(c['score_max_abs_tolerance'])
+    require(type(c.get('include_archive_in_score_tolerance',False)) is bool and
+            (not c.get('include_archive_in_score_tolerance') or 'score_max_abs_tolerance' in c),
+            'archive comparison requires a sealed maximum absolute score difference')
     steps=c.get('flow_steps', c['snapshot']['model_config']['num_inference_steps'])
     validate_options(c['pick'], c['candidate_count'], c.get('elite_count'), c.get('temperature'), steps)
     require((c['critic'] is not None)==(c['pick'] in Q_MODES), 'Q binding differs from selection mode')
@@ -203,6 +210,11 @@ def build_contract(args):
     if tolerance is not None:
         validate_score_tolerance(tolerance)
         c['score_max_abs_tolerance']=tolerance
+    include_archive=getattr(args,'include_archive_in_score_tolerance',False)
+    require(type(include_archive) is bool, 'invalid archive score tolerance option')
+    if include_archive:
+        require(tolerance is not None,'archive comparison requires an explicit score tolerance')
+        c['include_archive_in_score_tolerance']=True
     c['flow_steps']=args.flow_steps if args.flow_steps is not None else snapshot['model_config']['num_inference_steps']
     c['elite_count'],c['temperature']=args.elite_count,args.temperature
     validate_options(args.pick, args.candidate_count, c['elite_count'], c['temperature'], c['flow_steps'])
@@ -243,6 +255,8 @@ if __name__ == '__main__':
     p.add_argument('--elite-count',type=int,help='Number of complete BC-normalized chunks to average')
     p.add_argument('--score-max-abs-tolerance',type=float,
                    help='Maximum absolute runtime/offline score difference for the current critic')
+    p.add_argument('--include-archive-in-score-tolerance',action='store_true',
+                   help='Apply the same explicitly sealed maximum absolute difference to archive replay')
     p.add_argument('--temperature',type=float,help='Positive softmax temperature for Q-weighted averaging')
     p.add_argument('--pick',choices=('greedy','random',*MEAN_MODES),default='greedy')
     p.add_argument('--selection-seed',type=int,default=0)
