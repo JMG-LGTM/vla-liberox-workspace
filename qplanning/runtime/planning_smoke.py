@@ -5,7 +5,7 @@ import numpy as np
 import torch
 
 from .contract import require
-from .planning import digest
+from .planning import compare_scores, digest
 from .runtime_core import derive_seed, q_numerics
 
 
@@ -15,7 +15,7 @@ class PlanningParityError(ValueError):
         super().__init__(json.dumps(evidence,allow_nan=False))
 
 
-def check_planning(runtime, observation, trials, remaining):
+def check_planning(runtime, observation, trials, remaining, *, score_max_abs_tolerance=0.0):
     from openpi.policies.policy import Policy
     from ..c_score import candidate_scores
     from ..features import encode
@@ -62,6 +62,7 @@ def check_planning(runtime, observation, trials, remaining):
                                      per_slot_normalized_max_abs=normalized_errors)
                 if mismatches:
                     raise PlanningParityError(dict(stage='native_candidate_parity',**sample_evidence))
+                comparison=None
                 if runtime.scorer is not None:
                     raw_views=np.stack([observation[k][::-1] for k in runtime.policy_camera_keys])[None]
                     scorer=runtime.scorer
@@ -69,11 +70,9 @@ def check_planning(runtime, observation, trials, remaining):
                         features=encode(scorer.dino,raw_views,scorer.device,runtime.config)
                         offline=candidate_scores(scorer.net,features,pool.raw[None,:,:horizon],scorer.device,scorer.mean,scorer.std)[0]
                     scores=np.asarray(d['scores'],dtype=np.float32)
-                    if not np.array_equal(scores,offline):
-                        error=np.abs(scores-offline)
-                        raise PlanningParityError(dict(stage='offline_candidate_scores',mismatched_score_indices=np.flatnonzero(scores!=offline).tolist(),
-                                                       score_max_abs=float(error.max()),online_scores=scores.tolist(),offline_scores=offline.tolist(),
-                                                       **sample_evidence))
+                    comparison=compare_scores(scores,offline,elites,score_max_abs_tolerance)
+                    if not comparison['within_tolerance']:
+                        raise PlanningParityError(dict(stage='offline_candidate_scores',**comparison,**sample_evidence))
                     values, idx = torch.from_numpy(scores).topk(elites)
                     weights = torch.softmax((values-values.max())/runtime.temperature, dim=0)
                 else:
@@ -89,10 +88,11 @@ def check_planning(runtime, observation, trials, remaining):
                                                    actual_indices=d['selected_indices'],expected_weights=weights.tolist(),actual_weights=d['weights'],
                                                    normalized_expected_sha256=digest(normalized),normalized_actual_sha256=d['normalized_action_sha256'],
                                                    action_max_abs=float(np.abs(expected-actions).max()),
-                                                   mismatched_action_coordinates=np.argwhere(expected!=actions).tolist(),**sample_evidence))
+                                                   mismatched_action_coordinates=np.argwhere(expected!=actions).tolist(),score_comparison=comparison,**sample_evidence))
                 checks.append(dict(noise_exact=True,actions_exact=True,normalized_exact=True,raw_exact=True,aggregation_exact=True,
                                    selected_indices=idx.tolist(),weights=weights.tolist(),**sample_evidence,
-                                   offline_scores_exact=True if runtime.scorer is not None else None))
+                                   score_comparison=comparison,
+                                   offline_scores_exact=(comparison['score_max_abs']==0.0 if comparison is not None else None)))
                 diagnostics.append(d)
     finally:
         runtime.generate_planning_pool=generate

@@ -95,7 +95,39 @@ def check_single_selection(runtime, c, observation, trials, remaining):
     return diagnostics, checks
 
 
+def fixture_score_parity(online, offline, shape, contract, spec):
+    """Check the current critic separately from the frozen historical reference."""
+    if 'score_max_abs_tolerance' not in contract:
+        report=score_errors(online,offline)
+        check_limits(report,dict(spec,score_shape=list(shape)))
+        return report
+
+    from .planning import compare_scores
+    from .planning_smoke import PlanningParityError
+    require(online.shape==offline.shape==tuple(shape) and online.ndim==2 and online.size>0,
+            'current-critic fixture score shape differs')
+    rows=[compare_scores(x,y,contract.get('elite_count'),contract['score_max_abs_tolerance'])
+          for x,y in zip(online,offline,strict=True)]
+    for index,row in enumerate(rows):
+        if not row['within_tolerance']:
+            raise PlanningParityError(dict(stage='fixture_offline_scores',fixture_row=index,shape=list(shape),**row))
+    return dict(shape=list(shape),tolerance=contract['score_max_abs_tolerance'],within_tolerance=True,
+                max_abs_error=max(r['score_max_abs'] for r in rows),
+                mean_abs_error=float(np.mean([r['score_mean_abs'] for r in rows])),
+                top1_agreement=float(np.mean([r['top1_same'] for r in rows])),score_comparisons=rows)
+
+
 def smoke_locked(a,c):
+    from .planning_smoke import PlanningParityError
+    try:
+        return _smoke_locked(a,c)
+    except PlanningParityError as exc:
+        atomic_json(a.output,dict(status='FAIL_QPLANNING_GPU_SMOKE',pick=c['pick'],composite_sha256=c['composite_sha256'],
+                                  failure=exc.evidence))
+        raise
+
+
+def _smoke_locked(a,c):
     seed = (c['critic'] or {}).get('seed')
     import torch
     from .runtime_core import q_numerics
@@ -145,8 +177,7 @@ def smoke_locked(a,c):
                          for *views,cand in zip(*(fixture[k] for k in view_fields),actions,strict=True)])
         with q_numerics():
             offline=offline_scores(scorer.net,scorer.dino,fixture,spec,scorer.device,scorer.mean,scorer.std,runtime.config)
-        parity=score_errors(online,offline)
-        check_limits(parity,dict(spec,score_shape=list(actions.shape[:2])))
+        parity=fixture_score_parity(online,offline,actions.shape[:2],c,spec)
         tail=actions[0]
         horizon=runtime.config.horizon
         if horizon>1:
@@ -166,13 +197,9 @@ def smoke_locked(a,c):
     steps, horizon = runtime.config.max_steps, runtime.config.horizon
     remaining = [steps-i*horizon for i in range(3) if steps>i*horizon]+[min(steps,max(1,horizon-1))]
     if runtime.pick in MEAN_MODES:
-        from .planning_smoke import PlanningParityError, check_planning
-        try:
-            diagnostics, checks = check_planning(runtime, observation, a.trial_seeds, remaining)
-        except PlanningParityError as exc:
-            atomic_json(a.output,dict(status='FAIL_QPLANNING_GPU_SMOKE',pick=c['pick'],composite_sha256=c['composite_sha256'],
-                                      failure=exc.evidence))
-            raise
+        from .planning_smoke import check_planning
+        diagnostics, checks = check_planning(runtime, observation, a.trial_seeds, remaining,
+                                             score_max_abs_tolerance=c.get('score_max_abs_tolerance',0.))
     else:
         diagnostics, checks = check_single_selection(runtime, c, observation, a.trial_seeds, remaining)
     require(backend_flags(torch) == flags, 'attention flags changed during inference')

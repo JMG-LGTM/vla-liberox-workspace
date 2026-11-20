@@ -1,12 +1,13 @@
 """CPU regression for the averaged planners, using OpenPI's native sampler on a tiny actor."""
 import json
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 import torch
 
 from ..config import DEFAULT_CONFIG
-from .planning import aggregate
+from .planning import aggregate, compare_scores, validate_score_tolerance
 from .planning_smoke import PlanningParityError, check_planning
 from .runtime_core import CandidateRuntime
 from .check_runtime import Scorer
@@ -47,7 +48,92 @@ class TinyActor(torch.nn.Module):
         return .125*draw + t[:,None,None] - cache
 
 
+def check_score_evidence():
+    from .contract import verify_score_comparison
+    from .smoke import fixture_score_parity
+    tolerance=5e-4
+    limits=dict(score_max_abs_tolerance=tolerance,elite_count=2,candidate_count=3)
+    def fixture(v):
+        online=np.zeros((1,len(v)))
+        return fixture_score_parity(online,np.array([v]),online.shape,limits,{})
+
+    record=fixture([0.,tolerance,0.])['score_comparisons'][0]
+    assert record['score_max_abs']==tolerance and record['within_tolerance'] and record['spearman'] is None
+    verify_score_comparison(record,limits,3)
+    try:
+        verify_score_comparison(dict(record,score_max_abs=0.),limits,3)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('A modified maximum score error passed verification')
+    for value in (np.nextafter(tolerance,np.inf),np.nan,np.inf,-np.inf):
+        try:
+            fixture([0.,value])
+        except PlanningParityError as exc:
+            evidence=exc.evidence
+            assert evidence['stage']=='fixture_offline_scores' and not evidence['within_tolerance']
+            json.dumps(evidence,allow_nan=False)
+        else:
+            raise AssertionError('An over-limit or nonfinite score passed')
+    exact=compare_scores([1,2],[1,2],2,0.)
+    assert exact['within_tolerance'] and exact['score_max_abs']==0 and exact['top1_same']
+    assert not compare_scores([0],[1e-12],1,0.)['within_tolerance']
+    assert not compare_scores([np.inf],[np.inf],1,tolerance)['within_tolerance']
+    for bad in (-1.,np.nan,np.inf,True,'0.1'):
+        try:
+            validate_score_tolerance(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('Invalid score tolerance accepted')
+    tied=compare_scores([1,1,2],[2,1,1],2,1.)
+    assert np.isclose(tied['spearman'],-.5)
+    assert not tied['top1_same'] and tied['topk_overlap']==len(set(tied['online_topk']).intersection(tied['offline_topk']))
+    singleton=fixture([0.])['score_comparisons'][0]
+    assert singleton['topk_overlap'] is None and singleton['online_topk'] is None and singleton['spearman'] is None
+
+
+def check_runtime_scores(runtime, observation):
+    # Close score vectors have opposite ordering. The hand calculation must
+    # reconstruct the action using the runtime side even when no elites overlap.
+    count=runtime.candidate_count
+    online=np.linspace(0.,.0002,count,dtype=np.float32)
+    offline=online[::-1].copy()
+    runtime.scorer.net=runtime.scorer.dino=runtime.scorer.mean=runtime.scorer.std=None
+    with patch.object(runtime.scorer,'score',return_value=online), patch('qplanning.features.encode'), \
+            patch('qplanning.c_score.candidate_scores',return_value=offline[None]):
+        queries,samples=check_planning(runtime,observation,[1],[8],score_max_abs_tolerance=.0005)
+        sample=samples[0]
+        record=sample['score_comparison']
+        assert sample['aggregation_exact'] and not sample['offline_scores_exact']
+        assert record['within_tolerance'] and not record['top1_same'] and record['topk_overlap']==0
+        assert np.isclose(record['spearman'],-1.) and sample['selected_indices']==record['online_topk']
+        from .contract import validate_smoke
+        from .smoke import fixture_score_parity
+        contract=dict(composite_sha256='cpu-proof',candidate_policy_id='fixture',pick='weighted',elite_count=runtime.elite_count,
+                      candidate_count=count,critic={'sha256':'fixture-critic'},score_max_abs_tolerance=.0005)
+        fixture=fixture_score_parity(online[None],offline[None],(1,count),contract,{})
+        proof=dict(status='PASS_QPLANNING_GPU_SMOKE',composite_sha256='cpu-proof',candidate_policy_id='fixture',pick='weighted',
+                   bc_checks=samples,candidate_diagnostics=queries,scorer_parity=dict(fixture,checkpoint_sha256='fixture-critic'),
+                   reference_gpu={})
+        with patch('qplanning.runtime.reference_probe.load_spec'),patch('qplanning.runtime.reference_probe.validate_reference'):
+            validate_smoke(proof,contract)
+            try:
+                validate_smoke(dict(proof,candidate_diagnostics=[dict(queries[0],scores=offline.tolist())]),contract)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('Score evidence for a different query passed')
+        try:
+            check_planning(runtime,observation,[1],[8])
+        except PlanningParityError as exc:
+            assert exc.evidence['stage']=='offline_candidate_scores' and not exc.evidence['within_tolerance']
+        else:
+            raise AssertionError('The default did not require exact scores')
+
+
 def check():
+    check_score_evidence()
     rng=np.random.default_rng(37)
     norm=rng.normal(size=(5,7,3)).astype('float32')
     scores=np.array([-.3,.1,.2,.4,.3],dtype=np.float32)
@@ -116,9 +202,11 @@ def check():
         assert e['per_slot_normalized_max_abs']==[0.]*7 and len(e['per_slot_max_abs'])==7
     else:
         raise AssertionError('accepted altered candidate slots')
+    check_runtime_scores(q,obs)
     assert not torch.cuda.is_initialized()
     return dict(device='cpu',one_prefix_per_pool=True,native_normalized_and_raw_actions_exact=True,
                 complete_normalized_chunk_averaged=True,score_horizon_fixed=True,top1_exact=True,large_temperature_mean=True,
+                inclusive_score_tolerance=True,tie_aware_ranking=True,aggregation_uses_recorded_scores=True,
                 equal_candidate_streams=True,selection_without_replacement=True)
 
 

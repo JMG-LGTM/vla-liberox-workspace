@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 
 from ..config import QConfig, load_config
-from .planning import MEAN_MODES, Q_MODES, validate_options
+from .planning import MEAN_MODES, Q_MODES, compare_scores, validate_options, validate_score_tolerance
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_NOISE_NAMESPACE = 'qplanning-n4-v1'
@@ -70,6 +70,14 @@ def gpu_lock(contract):
         yield
 
 
+def verify_score_comparison(record, contract, candidate_count):
+    require(isinstance(record,dict) and len(record.get('online_scores',[]))==candidate_count,
+            'missing or incomplete score comparison')
+    expected=compare_scores(record['online_scores'],record['offline_scores'],contract.get('elite_count'),
+                            contract['score_max_abs_tolerance'])
+    require(expected==record and expected['within_tolerance'], 'recorded scores exceed tolerance or diagnostics differ')
+
+
 def validate_smoke(proof, contract):
     require(proof['status']=='PASS_QPLANNING_GPU_SMOKE' and proof['composite_sha256']==contract['composite_sha256']
             and proof['candidate_policy_id']==contract['candidate_policy_id'] and proof['pick']==contract['pick'],
@@ -84,10 +92,30 @@ def validate_smoke(proof, contract):
                     len(c['selected_indices'])==len(c['weights'])==contract['elite_count'] for c in proof['bc_checks']),
                 'missing normalized candidate, original BC or aggregation parity')
         if contract['pick'] in Q_MODES:
-            require(all(c.get('offline_scores_exact') for c in proof['bc_checks']), 'missing current offline candidate score parity')
+            if 'score_max_abs_tolerance' in contract:
+                diagnostics=proof.get('candidate_diagnostics') or []
+                require(len(diagnostics)==len(proof['bc_checks']), 'expected one diagnostic per candidate check')
+                for sample,query in zip(proof['bc_checks'],diagnostics,strict=True):
+                    record=sample.get('score_comparison')
+                    verify_score_comparison(record,contract,contract['candidate_count'])
+                    require(record['online_scores']==query.get('scores') and sample['selected_indices']==query.get('selected_indices')
+                            and sample['weights']==query.get('weights'), 'score comparison differs from the recorded decision')
+                    require(sample.get('offline_scores_exact') is (record['score_max_abs']==0.),
+                            'recorded exact equality differs from measured scores')
+            else:
+                require(all(c.get('offline_scores_exact') for c in proof['bc_checks']), 'missing current offline candidate score parity')
     if contract['pick'] in Q_MODES:
         from .reference_probe import load_spec, validate_reference
         validate_reference(proof.get('reference_gpu',{}),load_spec(contract))
+        if 'score_max_abs_tolerance' in contract:
+            parity=proof['scorer_parity']
+            rows=parity.get('score_comparisons',[])
+            require(rows and len(rows)==parity['shape'][0], 'missing same-device fixture score evidence')
+            for record in rows:
+                verify_score_comparison(record,contract,parity['shape'][1])
+            require(parity.get('within_tolerance') is True and parity.get('tolerance')==contract['score_max_abs_tolerance']
+                    and parity['max_abs_error']==max(record['score_max_abs'] for record in rows),
+                    'fixture error does not match the source scores')
         require(proof.get('scorer_parity',{}).get('checkpoint_sha256')==contract['critic']['sha256'],
                 'current policy scorer was not checked with its own checkpoint')
 
@@ -127,6 +155,8 @@ def validate_contract(path, *, verify_payloads=False):
     require(c['candidate_policy_id']==c['continuation_policy_id']==c['snapshot']['policy_id'], 'actor identities differ')
     require(type(c['candidate_count']) is int and c['candidate_count']>=1 and c['pick'] in ('greedy','random',*MEAN_MODES),
             'invalid selector')
+    if 'score_max_abs_tolerance' in c:
+        validate_score_tolerance(c['score_max_abs_tolerance'])
     steps=c.get('flow_steps', c['snapshot']['model_config']['num_inference_steps'])
     validate_options(c['pick'], c['candidate_count'], c.get('elite_count'), c.get('temperature'), steps)
     require((c['critic'] is not None)==(c['pick'] in Q_MODES), 'Q binding differs from selection mode')
@@ -169,6 +199,10 @@ def build_contract(args):
            continuation_policy_id=args.continuation_policy_id,pick=args.pick,candidate_count=args.candidate_count,
            selection_seed=args.selection_seed,noise_namespace=args.noise_namespace,q_config=q_config.to_dict(),
            protocol={k:configs[0]['config'][k] for k in PROTOCOL_FIELDS},schedule_sha256=sorted({v['schedule_sha256'] for v in configs}),critic=None)
+    tolerance=getattr(args,'score_max_abs_tolerance',None)
+    if tolerance is not None:
+        validate_score_tolerance(tolerance)
+        c['score_max_abs_tolerance']=tolerance
     c['flow_steps']=args.flow_steps if args.flow_steps is not None else snapshot['model_config']['num_inference_steps']
     c['elite_count'],c['temperature']=args.elite_count,args.temperature
     validate_options(args.pick, args.candidate_count, c['elite_count'], c['temperature'], c['flow_steps'])
@@ -207,6 +241,8 @@ if __name__ == '__main__':
     p.add_argument('--candidate-count',type=int,default=4)
     p.add_argument('--flow-steps',type=int,help='Number of flow steps per candidate; defaults to the actor setting')
     p.add_argument('--elite-count',type=int,help='Number of complete BC-normalized chunks to average')
+    p.add_argument('--score-max-abs-tolerance',type=float,
+                   help='Maximum absolute runtime/offline score difference for the current critic')
     p.add_argument('--temperature',type=float,help='Positive softmax temperature for Q-weighted averaging')
     p.add_argument('--pick',choices=('greedy','random',*MEAN_MODES),default='greedy')
     p.add_argument('--selection-seed',type=int,default=0)

@@ -30,6 +30,66 @@ def validate_options(pick, count, elites, temperature, steps):
         raise ValueError('Invalid selector or aggregation options')
 
 
+def validate_score_tolerance(tolerance):
+    if type(tolerance) not in (int, float) or not math.isfinite(tolerance) or tolerance < 0:
+        raise ValueError('The offline score tolerance must be a finite nonnegative number')
+
+
+def compare_scores(online, offline, elites, tolerance):
+    """Compare same-state candidate scores; ranking diagnostics do not gate acceptance."""
+    import numpy as np
+    import torch
+
+    validate_score_tolerance(tolerance)
+    online = np.asarray(online, dtype=np.float64)
+    offline = np.asarray(offline, dtype=np.float64)
+    if online.ndim != 1 or online.size == 0 or online.shape != offline.shape:
+        raise ValueError('Expected two aligned, nonempty score vectors')
+    if elites is not None and (type(elites) is not int or elites < 1):
+        raise ValueError('Elite count must be positive')
+
+    def json_scores(values):
+        return [float(x) if np.isfinite(x) else None for x in values]
+
+    result = dict(tolerance=tolerance, online_scores=json_scores(online), offline_scores=json_scores(offline),
+                  mismatched_score_indices=np.flatnonzero(online != offline).tolist(),
+                  nonfinite_online_indices=np.flatnonzero(~np.isfinite(online)).tolist(),
+                  nonfinite_offline_indices=np.flatnonzero(~np.isfinite(offline)).tolist(),
+                  within_tolerance=False, score_max_abs=None, score_mean_abs=None,
+                  online_top1=None, offline_top1=None, top1_same=None, elite_count=elites,
+                  online_topk=None, offline_topk=None, topk_overlap=None, spearman=None)
+    if result['nonfinite_online_indices'] or result['nonfinite_offline_indices']:
+        return result
+    with np.errstate(over='ignore'):
+        difference = np.abs(online - offline)
+    if not np.isfinite(difference).all():
+        return result
+
+    maximum = float(difference.max())
+    top1 = int(online.argmax())
+    other_top1 = int(offline.argmax())
+    # Scaling before the mean avoids overflow for large finite differences.
+    result.update(within_tolerance=maximum <= tolerance, score_max_abs=maximum,
+                  score_mean_abs=float(maximum * np.mean(difference / maximum)) if maximum else 0.,
+                  online_top1=top1, offline_top1=other_top1, top1_same=top1 == other_top1)
+    if elites is not None and elites <= len(online):
+        # Match the planner's CPU top-K operator, including ties at its cutoff.
+        top = torch.from_numpy(online).topk(elites).indices.tolist()
+        other = torch.from_numpy(offline).topk(elites).indices.tolist()
+        result.update(online_topk=top, offline_topk=other, topk_overlap=len(set(top).intersection(other)))
+
+    def centered_midranks(scores):
+        _, group, counts = np.unique(scores, return_inverse=True, return_counts=True)
+        ranks = (counts.cumsum() - (counts - 1) * .5)[group]
+        return ranks - ranks.mean()
+
+    left, right = centered_midranks(online), centered_midranks(offline)
+    denominator = np.linalg.norm(left) * np.linalg.norm(right)
+    if denominator:
+        result['spearman'] = float(np.clip(np.dot(left, right) / denominator, -1., 1.))
+    return result
+
+
 def digest(array):
     import numpy as np
     return hashlib.sha256(np.ascontiguousarray(array).tobytes()).hexdigest()
