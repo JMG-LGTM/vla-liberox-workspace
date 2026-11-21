@@ -4,10 +4,11 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
 import numpy as np
 from .planning import MEAN_MODES, Q_MODES, PlanningParityError
-from .contract import atomic_json, gpu_lock, require, validate_contract
+from .contract import atomic_json, gpu_lock, require, validate_contract, validate_feature_tolerance
 from .reference_probe import (check_limits, load_spec, offline_scores, require_matrix_pass, run_reference,
                               score_errors, score_matrix, validate_reference)
 
@@ -109,10 +110,69 @@ def fixture_score_parity(online, offline, shape, contract, spec):
     return report
 
 
-def smoke_locked(a,c):
+def training_feature_parity(scorer, frames, view_fields, tolerance):
+    """Compare local RGB encodings to the cached training features, retaining each frame's measurement."""
+    validate_feature_tolerance(tolerance)
+    cached = frames['features']
+    count = len(cached)
+    require(count > 0 and view_fields and all(len(frames[k]) == count for k in view_fields),
+            'expected aligned RGB views and cached training features')
+    require(all(k not in frames or len(frames[k]) == count for k in ('root_id','frame')),
+            'training feature metadata is misaligned')
+    rows = []
+    for index, original in enumerate(cached):
+        row = dict(index=index, root_id=str(frames['root_id'][index]) if 'root_id' in frames else None,
+                   frame=int(frames['frame'][index]) if 'frame' in frames else None,
+                   max_abs_error=None, mean_abs_error=None, within_tolerance=False)
+        rows.append(row)
+        try:
+            online = scorer.features(*(frames[k][index] for k in view_fields))[0].float().cpu().numpy()
+            require(online.shape == original.shape and original.size > 0, 'training feature shape differs')
+            with np.errstate(invalid='ignore',over='ignore'):
+                delta = np.abs(online - original.astype(np.float32))
+            row['elements'] = int(delta.size)
+            if np.isfinite(delta).all():
+                maximum = float(delta.max())
+                row.update(max_abs_error=maximum, mean_abs_error=float(delta.mean(dtype=np.float64)), within_tolerance=maximum <= tolerance)
+            else:
+                row['error'] = 'nonfinite training or local feature'
+        except (ValueError,RuntimeError,FloatingPointError) as exc:
+            row['error'] = str(exc)
+            break
+
+    complete = len(rows) == count and all(r['max_abs_error'] is not None for r in rows)
+    failed = [r['index'] for r in rows if not r['within_tolerance']]
+    return dict(tolerance=tolerance, within_tolerance=complete and not failed, frame_count=count,
+                frames_compared=sum(r['max_abs_error'] is not None for r in rows), failed_frames=failed, per_frame=rows,
+                max_abs_error=max(r['max_abs_error'] for r in rows) if complete else None,
+                mean_abs_error=_mean_feature_error(rows) if complete else None)
+
+
+def _mean_feature_error(rows):
+    return math.fsum(r['mean_abs_error'] * r['elements'] for r in rows) / sum(r['elements'] for r in rows)
+
+
+def validate_training_feature_parity(report, tolerance, scorer_parity):
+    validate_feature_tolerance(tolerance)
+    require(isinstance(report,dict) and report.get('within_tolerance') is True and report.get('tolerance') == tolerance,
+            'training feature evidence missing or bound to a different tolerance')
+    rows = report['per_frame']
+    require(rows and len(rows) == report['frame_count'] == report['frames_compared'] == scorer_parity['training_feature_frames']
+            and report['failed_frames'] == [], 'incomplete training feature evidence')
+    for index,r in enumerate(rows):
+        maximum, mean = r['max_abs_error'], r['mean_abs_error']
+        require(r['index'] == index and r['within_tolerance'] is True and not r.get('error')
+                and type(r['elements']) is int and r['elements'] > 0
+                and type(maximum) in (int,float) and type(mean) in (int,float) and 0 <= mean <= maximum <= tolerance,
+                'training feature frame exceeded tolerance or has invalid statistics')
+    require(report['max_abs_error'] == max(r['max_abs_error'] for r in rows) == scorer_parity['feature_max_abs_error']
+            and report['mean_abs_error'] == _mean_feature_error(rows), 'training feature summary differs from its frames')
+
+
+def smoke_locked(a,c, *, on_fixture_scores=None):
     progress={}
     try:
-        return _smoke_locked(a,c,progress)
+        return _smoke_locked(a,c,progress,on_fixture_scores=on_fixture_scores)
     except (ValueError,RuntimeError,FloatingPointError) as exc:
         stage=progress.pop('stage','smoke_setup')
         failure=exc.evidence if isinstance(exc,PlanningParityError) else dict(stage=stage,error=str(exc))
@@ -123,7 +183,7 @@ def smoke_locked(a,c):
         raise
 
 
-def _smoke_locked(a,c,progress):
+def _smoke_locked(a,c,progress, *, on_fixture_scores):
     seed = (c['critic'] or {}).get('seed')
     import torch
     from .runtime_core import q_numerics
@@ -163,11 +223,12 @@ def _smoke_locked(a,c,progress):
         with np.load(a.train_frames) as z:
             frames = {k: z[k] for k in z.files}
         view_fields=spec['view_fields']
-        feature_errors = []
-        for *views, cached in zip(*(frames[k] for k in view_fields),frames['features'],strict=True):
-            online=scorer.features(*views)[0].float().cpu().numpy()
-            feature_errors.append(float(np.abs(online-cached.astype(np.float32)).max()))
-        require(max(feature_errors)<=spec['feature_atol'],f'online feature error: {max(feature_errors)}')
+        feature_tolerance=c['training_feature_max_abs_tolerance'] if 'training_feature_max_abs_tolerance' in c else spec['feature_atol']
+        feature_report=training_feature_parity(scorer,frames,view_fields,feature_tolerance)
+        progress['training_feature_parity']=feature_report
+        if not feature_report['within_tolerance']:
+            raise PlanningParityError(dict(stage='training_feature_parity',first_failed_frame=feature_report['failed_frames'][0],
+                                           max_abs_error=feature_report['max_abs_error'],tolerance=feature_tolerance))
 
         progress['stage']='fixture_offline_scores'
         fixture_path=a.q_fixture or spec['assets']['fixture']['path']
@@ -182,6 +243,10 @@ def _smoke_locked(a,c,progress):
                 raise PlanningParityError(dict(stage='fixture_runtime_scores',fixture_row=index,error=str(exc),
                                                completed_online_scores=[row.tolist() for row in online])) from exc
         online=np.stack(online)
+        if on_fixture_scores is not None:
+            progress['stage']='training_fixture_scores'
+            on_fixture_scores(online.copy())
+            progress['stage']='fixture_offline_scores'
         try:
             with q_numerics():
                 offline=offline_scores(scorer.net,scorer.dino,fixture,spec,scorer.device,scorer.mean,scorer.std,runtime.config)
@@ -202,8 +267,8 @@ def _smoke_locked(a,c,progress):
                     'masked tail actions changed Q')
         progress['stage']='scoring_backend_flags'
         require(backend_flags(torch)==flags,'Q scoring changed process-wide attention flags')
-        parity.update(checkpoint_sha256=c['critic']['sha256'],training_feature_frames=len(feature_errors),
-                      feature_max_abs_error=max(feature_errors))
+        parity.update(checkpoint_sha256=c['critic']['sha256'],training_feature_frames=feature_report['frame_count'],
+                      feature_max_abs_error=feature_report['max_abs_error'])
 
     progress['stage']='live_candidate_checks'
     with np.load(a.observation, allow_pickle=False) as data:
@@ -232,6 +297,8 @@ def _smoke_locked(a,c,progress):
                                  features=float(np.median([d['feature_ms'] for d in diagnostics])),
                                  q=float(np.median([d['critic_selection_ms'] for d in diagnostics]))),
                  peak_allocated_bytes=torch.cuda.max_memory_allocated(), peak_reserved_bytes=torch.cuda.max_memory_reserved())
+    if 'training_feature_parity' in progress:
+        proof['training_feature_parity']=progress['training_feature_parity']
     atomic_json(a.output, proof)
     print(json.dumps({k: v for k, v in proof.items() if k not in ('bc_checks','candidate_diagnostics')}))
 

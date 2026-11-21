@@ -32,3 +32,5 @@
 `python -m qplanning.runtime.check_planning` 在 CPU 上测试完整动作块加权、选择随机数、共享前缀以及与 OpenPI 原生单条采样的等价性。GPU smoke 对每个实际候选逐项核对原生归一化输出与解码输出，核对本次 Q 的离线分数并独立重算聚合动作。可用 `--reference-proof` 提供已经验证的归档评分记录。
 
 可在构建运行契约时用 `--score-max-abs-tolerance` 设置当前 Q 的运行时与离线评分最大绝对误差，同时传入 `--include-archive-in-score-tolerance` 可将同一阈值用于归档评分重放。单独使用前一选项时，归档评分沿用归档中已有的阈值。采用统一阈值的对照要求所有分数有限，逐项最大绝对差小于或等于阈值。smoke 按状态记录两边的分数、最大和平均绝对差、第一名、前 K 个候选的重合数和 Spearman 秩相关。第一名并列时取最小候选下标，前 K 个使用规划器的 CPU top-K 排序，Spearman 对并列分数取平均秩。单候选的排名指标、常数向量的 Spearman 和候选少于 K 时的前 K 重合数均记为空。加权校验使用运行时记录的 Q 值独立复算。
+
+训练特征缓存可来自另一设备。构建契约时，用 `--training-feature-max-abs-tolerance` 指定本机从 RGB 重算的特征与训练缓存之间允许的最大绝对差，省略时沿用 smoke 配置中的 `feature_atol`。smoke 按帧保存最大和平均绝对差，并在有轨迹编号、帧号时一并记录。

@@ -5,6 +5,7 @@ import hashlib
 import contextlib
 import fcntl
 import json
+import math
 import os
 from pathlib import Path
 
@@ -78,6 +79,11 @@ def verify_score_comparison(record, contract, candidate_count):
     require(expected==record and expected['within_tolerance'], 'recorded scores exceed tolerance or diagnostics differ')
 
 
+def validate_feature_tolerance(tolerance):
+    require(type(tolerance) in (int,float) and math.isfinite(tolerance) and tolerance >= 0,
+            'training feature tolerance must be finite and nonnegative')
+
+
 def validate_smoke(proof, contract):
     require(proof['status']=='PASS_QPLANNING_GPU_SMOKE' and proof['composite_sha256']==contract['composite_sha256']
             and proof['candidate_policy_id']==contract['candidate_policy_id'] and proof['pick']==contract['pick'],
@@ -106,7 +112,12 @@ def validate_smoke(proof, contract):
                 require(all(c.get('offline_scores_exact') for c in proof['bc_checks']), 'missing current offline candidate score parity')
     if contract['pick'] in Q_MODES:
         from .reference_probe import load_spec, validate_reference, verify_score_matrix
-        validate_reference(proof.get('reference_gpu',{}),load_spec(contract))
+        spec = load_spec(contract)
+        validate_reference(proof.get('reference_gpu',{}),spec)
+        if 'training_feature_max_abs_tolerance' in contract or 'training_feature_parity' in proof:
+            from .smoke import validate_training_feature_parity
+            tolerance = contract['training_feature_max_abs_tolerance'] if 'training_feature_max_abs_tolerance' in contract else spec['feature_atol']
+            validate_training_feature_parity(proof.get('training_feature_parity'), tolerance, proof['scorer_parity'])
         if contract.get('include_archive_in_score_tolerance'):
             parity=proof['scorer_parity']
             verify_score_matrix(parity,parity['shape'],contract.get('elite_count'),
@@ -161,6 +172,9 @@ def validate_contract(path, *, verify_payloads=False):
             'invalid selector')
     if 'score_max_abs_tolerance' in c:
         validate_score_tolerance(c['score_max_abs_tolerance'])
+    if 'training_feature_max_abs_tolerance' in c:
+        require(c['pick'] in Q_MODES, 'training feature comparison requires a critic')
+        validate_feature_tolerance(c['training_feature_max_abs_tolerance'])
     require(type(c.get('include_archive_in_score_tolerance',False)) is bool and
             (not c.get('include_archive_in_score_tolerance') or 'score_max_abs_tolerance' in c),
             'archive comparison requires a sealed maximum absolute score difference')
@@ -210,6 +224,11 @@ def build_contract(args):
     if tolerance is not None:
         validate_score_tolerance(tolerance)
         c['score_max_abs_tolerance']=tolerance
+    feature_tolerance=getattr(args,'training_feature_max_abs_tolerance',None)
+    if feature_tolerance is not None:
+        require(args.pick in Q_MODES, 'training feature comparison requires a critic')
+        validate_feature_tolerance(feature_tolerance)
+        c['training_feature_max_abs_tolerance']=feature_tolerance
     include_archive=getattr(args,'include_archive_in_score_tolerance',False)
     require(type(include_archive) is bool, 'invalid archive score tolerance option')
     if include_archive:
@@ -255,6 +274,8 @@ if __name__ == '__main__':
     p.add_argument('--elite-count',type=int,help='Number of complete BC-normalized chunks to average')
     p.add_argument('--score-max-abs-tolerance',type=float,
                    help='Maximum absolute runtime/offline score difference for the current critic')
+    p.add_argument('--training-feature-max-abs-tolerance',type=float,
+                   help='Maximum absolute difference between local image features and the training feature cache')
     p.add_argument('--include-archive-in-score-tolerance',action='store_true',
                    help='Apply the same explicitly sealed maximum absolute difference to archive replay')
     p.add_argument('--temperature',type=float,help='Positive softmax temperature for Q-weighted averaging')

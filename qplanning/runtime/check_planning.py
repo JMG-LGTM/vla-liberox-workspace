@@ -203,9 +203,48 @@ def check_archive_scope():
                for key in ('online_top1','offline_top1','top1_same','topk_overlap','spearman'))
 
 
+def check_training_feature_gate():
+    from .contract import validate_feature_tolerance
+    from .smoke import training_feature_parity, validate_training_feature_parity, fixture_score_parity
+
+    source = np.array([[0,.25],[.125,.125]], dtype=np.float32)
+    frames = dict(camera=source, features=np.zeros_like(source,dtype=np.float16),
+                  frame=np.array([3,9]),root_id=np.array(['r0','r1']))
+    scorer = SimpleNamespace(features=lambda x:torch.from_numpy(x[None]))
+    measured = training_feature_parity(scorer, frames, ['camera'], .25)
+    assert measured['within_tolerance'] and measured['frames_compared']==2
+    assert [(r['index'],r['root_id'],r['frame'],r['max_abs_error'],r['mean_abs_error']) for r in measured['per_frame']]==[
+            (0,'r0',3,.25,.125),(1,'r1',9,.125,.125)]
+    summary=dict(training_feature_frames=2,feature_max_abs_error=.25)
+    validate_training_feature_parity(measured,.25,summary)
+    for bad in (dict(measured,mean_abs_error=0),dict(measured,tolerance=1),dict(measured,per_frame=measured['per_frame'][:1])):
+        try: validate_training_feature_parity(bad,.25,summary)
+        except ValueError: pass
+        else: raise AssertionError('Inconsistent training feature proof accepted')
+    failed=training_feature_parity(scorer,frames,['camera'],np.nextafter(.25,0.).item())
+    assert not failed['within_tolerance'] and failed['failed_frames']==[0] and len(failed['per_frame'])==2
+    frames['camera']=np.array([[0,np.nan],[.125,.125]],dtype=np.float32)
+    invalid=training_feature_parity(scorer,frames,['camera'],.25)
+    assert invalid['failed_frames']==[0] and invalid['frames_compared']==1 and invalid['max_abs_error'] is None
+    assert invalid['per_frame'][0]['error'] and invalid['per_frame'][1]['mean_abs_error']==.125
+    json.dumps(invalid,allow_nan=False)
+    for tolerance in (True,-1,float('nan'),float('inf')):
+        try: validate_feature_tolerance(tolerance)
+        except ValueError: pass
+        else: raise AssertionError('Invalid training feature tolerance accepted')
+
+    # A feature tolerance larger than an actual local Q difference must not relax the local Q gate.
+    contract=dict(training_feature_max_abs_tolerance=.25,score_max_abs_tolerance=.005,elite_count=1)
+    try: fixture_score_parity(np.array([[0.]]),np.array([[.006]]),(1,1),contract,{})
+    except PlanningParityError as exc:
+        assert exc.evidence['stage']=='fixture_offline_scores' and exc.evidence['tolerance']==.005
+    else: raise AssertionError('Training feature tolerance leaked into the fixed local Q check')
+
+
 def check():
     check_score_evidence()
     check_archive_scope()
+    check_training_feature_gate()
     rng=np.random.default_rng(37)
     norm=rng.normal(size=(5,7,3)).astype('float32')
     scores=np.array([-.3,.1,.2,.4,.3],dtype=np.float32)
@@ -279,6 +318,7 @@ def check():
     return dict(device='cpu',one_prefix_per_pool=True,native_normalized_and_raw_actions_exact=True,
                 complete_normalized_chunk_averaged=True,score_horizon_fixed=True,top1_exact=True,large_temperature_mean=True,
                 inclusive_score_tolerance=True,tie_aware_ranking=True,aggregation_uses_recorded_scores=True,
+                per_frame_feature_evidence=True,independent_feature_tolerance=True,
                 equal_candidate_streams=True,selection_without_replacement=True)
 
 
